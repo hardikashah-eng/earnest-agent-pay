@@ -1,0 +1,53 @@
+# Initial scope
+
+## Goal for v0.1
+
+A runnable demo, using no real money, that shows two agents on the same tasks: one stays faithful and its limits grow, the other overspends and gets throttled. Quickstart in under 5 minutes, no accounts needed.
+
+## In scope (v0.1)
+
+**Spec**
+- JSON Schemas for `profile`, `mandate`, `trust_tier`, `spend_request`, `outcome`.
+- `SPEC.md`: field meanings, how profile + mandate + trust combine into a decision.
+
+**Gateway**
+- SQLite ledger: agents, profiles, mandates, transactions, outcomes.
+- Rules engine: each spend request is approved, denied or escalated to the user.
+- Trust score per (user, agent, task type); tiers map the score to cap, credential lifetime and approval threshold.
+- Scoring: +faithfulness for in-mandate purchases and correct escalation, a sharp penalty for violations, efficiency only on accepted outcomes, decay over time.
+- MCP server exposing `request_spend`, `get_limits`, `report_outcome`.
+
+**Backends**
+- `mock`: simulated cards and authorizations (default).
+
+**Demo**
+- Two-agent simulation script plus a limits-over-time chart.
+
+## Next (v0.2+)
+
+- `stripe_issuing` backend in test mode: single-use capped virtual cards, real-time authorization webhook enforcing the mandate.
+- Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.
+- Learn profile from approvals and rejections (revealed preference), with the user able to see and edit it.
+- Modes: personal / work / gift.
+- Simple web UI for approvals and outcome feedback.
+
+## Out of scope (for now)
+
+- Real money, production card issuing, KYC.
+- A cross-bank, portable reputation network.
+- Crypto rails (x402, smart-wallet spend permissions); possible future backends.
+
+## Design principles
+
+- **Agents never hold credentials**; they get scoped, expiring ones per approved request.
+- **Explicit instructions win**: the profile never overrides what a mandate says.
+- **Profile stays with the user**: merchants only see what's needed (amount, shipping, deadline).
+- **Rise slowly, fall fast**: trust is earned gradually and lost quickly.
+- **Score outcomes, not just spend**: reward value delivered, not underspending.
+- **Open spec, swappable backends.**
+
+## Open questions
+
+- How to benchmark "fair price" per task type without a data source?
+- Should trust reset fully on a model change, or decay partly?
+- How to score open-ended tasks (gifts) where success is known only later?

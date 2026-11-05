@@ -1,0 +1,28 @@
+{
+  "profile": {
+    "user_id": "user_demo",
+    "price_sensitivity": 0.8,
+    "autonomy": 0.7,
+    "novelty": 0.3,
+    "privacy": 0.9,
+    "explanation_style": "brief_technical",
+    "hard_rules": ["no_subscriptions"]
+  },
+  "mandate": {
+    "id": "mnd_001",
+    "intent": "surprise birthday gift for Sam",
+    "mode": "gift",
+    "budget": { "currency": "USD", "min": 50, "max": 80 },
+    "deadline": "2026-11-14",
+    "approval": "shortlist_of_3",
+    "secrecy": true,
+    "ship_to": "self",
+    "recipient": { "interests": ["hiking", "coffee"] }
+  },
+  "agent_trust": {
+    "agent_id": "agent_shopper",
+    "task_type": "gift_shopping",
+    "score": 12,
+    "tier": "new"
+  }
+}
