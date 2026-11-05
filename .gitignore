@@ -11,9 +11,10 @@ venv/
 # Node
 node_modules/
 
-# Local data
+# Local data (your real statements and ledger never get committed)
 *.sqlite
 *.db
+/statements/
 
 # OS / editor
 .DS_Store

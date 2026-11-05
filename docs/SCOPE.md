@@ -25,6 +25,15 @@ All items below shipped in v0.1. One change from the plan: outcomes are reported
 **Demo**
 - Two-agent simulation script plus a limits-over-time chart.
 
+## Spending insights (v0.2) — done
+
+- Import card statements manually (`earnest import`) or automatically (`earnest sync` on an inbox folder, `--watch`, or a `TransactionSource` connector), with deduplication across overlapping exports.
+- Merchant cleanup and categories.
+- Detectors: card fees, subscription price creep, overlapping streaming subscriptions, cheaper store you already use, food delivery habits, category spikes vs. your usual.
+- Monthly top 5, ranked by saving × confidence; dismissed insights stay hidden.
+
+Next for insights: receipt / order import for item-level advice ("buy X at Y instead"), a real bank-aggregator connector, learning the profile (`price_sensitivity`, store loyalty) from spending, and using real spend as fair-price benchmarks for agent scoring.
+
 ## Next (v0.2+)
 
 - `stripe_issuing` backend in test mode: single-use capped virtual cards, real-time authorization webhook enforcing the mandate.

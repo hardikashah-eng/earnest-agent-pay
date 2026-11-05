@@ -29,6 +29,43 @@ def _print(obj) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
 
+def _insights_cmd(args, gw: Gateway) -> int:
+    from .insights import TransactionStore, import_file, sync_folder, top_insights, watch_folder
+
+    store = TransactionStore(gw.ledger.db)
+    if args.cmd == "import":
+        _print(import_file(store, args.file, args.user).to_dict())
+    elif args.cmd == "sync":
+        if args.watch:
+            print(f"watching {args.inbox} every {args.every:g}s (Ctrl+C to stop)")
+            try:
+                watch_folder(store, args.inbox, args.user, args.every, on_result=lambda r: _print(r.to_dict()))
+            except KeyboardInterrupt:
+                pass
+        else:
+            results = sync_folder(store, args.inbox, args.user)
+            _print([r.to_dict() for r in results] or f"no new files in {args.inbox}")
+            if any(r.error for r in results):
+                return 1
+    elif args.cmd == "imports":
+        _print(store.imports(args.user))
+    elif args.cmd == "insights":
+        txs = store.all(args.user)
+        if not txs:
+            print("no transactions yet: run `earnest import <statement.csv> --user ...` or `earnest sync`",
+                  file=sys.stderr)
+            return 2
+        report = top_insights(txs, args.month, store.dismissed(args.user), n=args.top)
+        if args.json:
+            _print(report.to_dict())
+        else:
+            print(report.to_text())
+    elif args.cmd == "dismiss-insight":
+        store.dismiss(args.user, args.key)
+        print(f"dismissed {args.key}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="earnest", description="Agents earn spending limits by behaving well.")
     ap.add_argument("--db", default="earnest.db", help="SQLite ledger file (default: earnest.db)")
@@ -56,6 +93,26 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("demo", help="run the two-agent simulation and write a chart")
     p.add_argument("--out", default="demo/limits.svg")
     p.add_argument("--days", type=int, default=40)
+
+    # --- spending insights ---
+    p = sub.add_parser("import", help="manually import a card statement CSV")
+    p.add_argument("file")
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("sync", help="automatically import new CSVs dropped into an inbox folder")
+    p.add_argument("--user", required=True)
+    p.add_argument("--inbox", default="statements/inbox")
+    p.add_argument("--watch", action="store_true", help="keep running and sync on an interval")
+    p.add_argument("--every", type=float, default=3600, help="seconds between syncs with --watch")
+    p = sub.add_parser("imports", help="list past imports")
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("insights", help="top spending insights for a month")
+    p.add_argument("--user", required=True)
+    p.add_argument("--month", help="YYYY-MM (default: latest month with data)")
+    p.add_argument("--top", type=int, default=5)
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("dismiss-insight", help="hide an insight you already know about")
+    p.add_argument("key")
+    p.add_argument("--user", required=True)
 
     args = ap.parse_args(argv)
 
@@ -85,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
             _print(gw.limits(args.user, args.agent, args.task))
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
+        elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):
+            return _insights_cmd(args, gw)
     except ValidationError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

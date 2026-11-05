@@ -70,6 +70,51 @@ Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config
 
 The agent gets three tools: `list_mandates`, `get_limits` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
 
+## Spending insights
+
+Import your card statements and get the **top 5 things worth knowing each month**: fees you could avoid, prices that crept up, overlapping subscriptions, cheaper stores you already use, delivery habits and unusual spikes. Everything stays in your local SQLite file.
+
+**Manual import:** download a CSV from your bank and import it.
+
+```bash
+python -m earnest import examples/statements/statement-jul-sep.csv --user user_demo
+```
+
+**Automated import:** drop exports into an inbox folder; `sync` picks up only new files. Run it on a schedule (cron, Windows Task Scheduler) or keep it running with `--watch`.
+
+```bash
+python -m earnest sync --user user_demo --inbox statements/inbox
+python -m earnest sync --user user_demo --inbox statements/inbox --watch --every 3600
+```
+
+Bank-API connectors (e.g. an aggregator) plug in through the `TransactionSource` interface in [earnest/insights/sources.py](earnest/insights/sources.py).
+
+Re-importing a file, or importing overlapping exports (Jul–Sep then Sep–Oct), never double counts. Common CSV shapes are supported: one signed `Amount` column (either sign convention) or separate `Debit`/`Credit` columns. Card payments and refunds aren't counted as spending.
+
+```bash
+python -m earnest insights --user user_demo            # latest month; --month 2026-10, --json
+python -m earnest dismiss-insight fees:2026-10 --user user_demo   # "I know about this"
+```
+
+Sample output (made-up data from [examples/make_sample_statements.py](examples/make_sample_statements.py)):
+
+```
+Top 5 insights for October 2026
+(114 transactions considered, $2,018.61 spent this month)
+
+1. $643.75 at Whole Foods this month
+   You already shop at Aldi; a typical basket there costs about 40% less (rough estimate, not item prices).
+   -> Move staples (pantry, dairy, produce basics) to Aldi; keep specialty items at Whole Foods.
+   ~$129/month possible | confidence 55% | dismiss: switch:Whole Foods->Aldi
+
+2. Shopping spending is 4.9x your usual
+3. $43.12 in card fees this month
+4. 9 food delivery orders this month ($357.83)
+5. 5 streaming subscriptions: $64.95 a month
+```
+
+Insights are ranked by estimated monthly saving × confidence. **Limits:** statements show the store and total, not the items, so store-switch savings use a rough price index ([detectors.py](earnest/insights/detectors.py)), not item prices. Item-level advice ("buy X at Y instead") needs receipt data, which is planned.
+
 ---
 
 ## Why
@@ -124,7 +169,8 @@ earnest/           the gateway
   mcp_server.py    agent-facing MCP tools
   cli.py           user-facing commands
   simulate.py      two-agent demo
-examples/          sample profile, mandates and requests
+  insights/        statement import (manual + automated), detectors, monthly report
+examples/          sample profile, mandates, requests and fake card statements
 demo/limits.svg    demo chart
 tests/             unit tests
 docs/SCOPE.md      scope and roadmap
