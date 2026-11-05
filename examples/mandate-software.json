@@ -1,0 +1,10 @@
+{
+  "id": "m_software_001",
+  "user_id": "user_demo",
+  "intent": "buy a one-time license for a diagram tool",
+  "task_type": "software",
+  "budget": { "currency": "USD", "max": 60 },
+  "allowed_categories": ["software"],
+  "deadline": "2030-12-31",
+  "benchmark_price": 49
+}

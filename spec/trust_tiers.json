@@ -1,0 +1,9 @@
+{
+  "description": "Default trust tiers (v0.1). min_score is inclusive; tiers are checked from highest to lowest.",
+  "tiers": [
+    { "name": "trusted",     "min_score": 60,    "cap": 1000, "lifetime_hours": 168, "approval_over": 500, "single_use": false, "approve_new_merchants": true },
+    { "name": "established", "min_score": 20,    "cap": 200,  "lifetime_hours": 24,  "approval_over": 150, "single_use": true,  "approve_new_merchants": false },
+    { "name": "new",         "min_score": 0,     "cap": 25,   "lifetime_hours": 1,   "approval_over": 10,  "single_use": true,  "approve_new_merchants": false },
+    { "name": "restricted",  "min_score": null,  "cap": 0,    "lifetime_hours": 1,   "approval_over": 0,   "single_use": true,  "approve_new_merchants": false }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "m_gift_sam",
+  "user_id": "user_demo",
+  "intent": "surprise birthday gift for Sam, into hiking and coffee",
+  "task_type": "gift_shopping",
+  "mode": "gift",
+  "budget": { "currency": "USD", "min": 50, "max": 80 },
+  "deadline": "2030-11-14",
+  "approval": "shortlist",
+  "secrecy": true,
+  "ship_to": "self",
+  "recipient": { "name": "Sam", "interests": ["hiking", "coffee"] }
+}

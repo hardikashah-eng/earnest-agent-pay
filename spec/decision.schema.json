@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hardikashah-eng/earnest-agent-pay/spec/decision.schema.json",
+  "title": "Decision",
+  "description": "The gateway's answer to a spend request.",
+  "type": "object",
+  "required": ["request_id", "status", "reasons", "tier"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["approved", "denied", "escalated"] },
+    "reasons": { "type": "array", "items": { "type": "string" } },
+    "tier": { "type": "string", "enum": ["restricted", "new", "established", "trusted"] },
+    "credential": {
+      "type": "object",
+      "description": "Present only when approved. A scoped, expiring payment credential.",
+      "required": ["id", "cap", "currency", "expires_at", "single_use"],
+      "properties": {
+        "id": { "type": "string" },
+        "cap": { "type": "number" },
+        "currency": { "type": "string" },
+        "merchant_lock": { "type": "string" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "single_use": { "type": "boolean" },
+        "backend": { "type": "string" }
+      }
+    }
+  }
+}

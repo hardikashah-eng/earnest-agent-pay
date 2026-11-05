@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hardikashah-eng/earnest-agent-pay/spec/spend_request.schema.json",
+  "title": "SpendRequest",
+  "description": "What an agent sends when it wants to spend.",
+  "type": "object",
+  "required": ["agent_id", "mandate_id", "amount", "merchant", "category", "reason"],
+  "properties": {
+    "agent_id": { "type": "string" },
+    "mandate_id": { "type": "string" },
+    "amount": { "type": "number", "exclusiveMinimum": 0 },
+    "merchant": { "type": "string" },
+    "category": { "type": "string" },
+    "reason": { "type": "string", "description": "Why this purchase serves the mandate." },
+    "recurring": { "type": "boolean", "default": false, "description": "True for subscriptions." },
+    "international": { "type": "boolean", "default": false },
+    "ask_first": {
+      "type": "boolean", "default": false,
+      "description": "The agent is unsure and asks for approval before acting. Rewarded."
+    }
+  },
+  "additionalProperties": false
+}

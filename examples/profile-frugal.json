@@ -1,0 +1,9 @@
+{
+  "user_id": "user_demo",
+  "price_sensitivity": 0.8,
+  "autonomy": 0.5,
+  "novelty": 0.3,
+  "privacy": 0.9,
+  "explanation_style": "brief_technical",
+  "hard_rules": ["no_subscriptions"]
+}

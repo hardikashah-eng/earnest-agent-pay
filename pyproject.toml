@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "earnest-agent-pay"
+version = "0.1.0"
+description = "Agents earn spending limits by behaving well."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Pinned to the 1.x API (FastMCP). mcp 2.x renamed it; migrating is a v0.2 task.
+mcp = ["mcp>=1.2,<2"]
+
+[project.scripts]
+earnest = "earnest.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["earnest*"]

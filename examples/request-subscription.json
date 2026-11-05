@@ -1,0 +1,9 @@
+{
+  "agent_id": "agent_shopper",
+  "mandate_id": "m_software_001",
+  "amount": 9,
+  "merchant": "diagramtool.com",
+  "category": "software",
+  "reason": "Monthly plan is cheaper up front",
+  "recurring": true
+}

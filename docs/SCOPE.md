@@ -4,7 +4,9 @@
 
 A runnable demo, using no real money, that shows two agents on the same tasks: one stays faithful and its limits grow, the other overspends and gets throttled. Quickstart in under 5 minutes, no accounts needed.
 
-## In scope (v0.1)
+## In scope (v0.1) — done
+
+All items below shipped in v0.1. One change from the plan: outcomes are reported by the user through the CLI, not through an MCP tool, so an agent can never grade its own work. The MCP server exposes `list_mandates`, `get_limits` and `request_spend`.
 
 **Spec**
 - JSON Schemas for `profile`, `mandate`, `trust_tier`, `spend_request`, `outcome`.
@@ -30,6 +32,8 @@ A runnable demo, using no real money, that shows two agents on the same tasks: o
 - Learn profile from approvals and rejections (revealed preference), with the user able to see and edit it.
 - Modes: personal / work / gift.
 - Simple web UI for approvals and outcome feedback.
+- Migrate the MCP server to the mcp 2.x SDK (currently pinned to 1.x).
+- Rate-limit `ask_first` so an agent can't flood the user with questions.
 
 ## Out of scope (for now)
 

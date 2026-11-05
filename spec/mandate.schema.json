@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hardikashah-eng/earnest-agent-pay/spec/mandate.schema.json",
+  "title": "Mandate",
+  "description": "What one task allows: the user's explicit instructions. A mandate always wins over the profile.",
+  "type": "object",
+  "required": ["id", "user_id", "intent", "task_type", "budget"],
+  "properties": {
+    "id": { "type": "string" },
+    "user_id": { "type": "string" },
+    "intent": { "type": "string", "description": "The user's instruction in plain language." },
+    "task_type": {
+      "type": "string",
+      "description": "Category used to key trust, e.g. 'software', 'groceries', 'gift_shopping'."
+    },
+    "mode": { "type": "string", "enum": ["personal", "work", "gift"], "default": "personal" },
+    "budget": {
+      "type": "object",
+      "required": ["max"],
+      "properties": {
+        "currency": { "type": "string", "default": "USD" },
+        "min": { "type": "number", "minimum": 0, "description": "Spending less is also a miss (e.g. gifts)." },
+        "max": { "type": "number", "minimum": 0, "description": "Total the mandate may spend." }
+      },
+      "additionalProperties": false
+    },
+    "allowed_categories": {
+      "type": "array", "items": { "type": "string" },
+      "description": "Merchant categories allowed. Empty or missing = any."
+    },
+    "blocked_merchants": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "deadline": { "type": "string", "format": "date", "description": "Spending is refused after this date." },
+    "approval": {
+      "type": "string", "enum": ["auto", "always", "shortlist"], "default": "auto",
+      "description": "auto = trust tier decides; always = every purchase needs approval; shortlist = agent proposes options, user picks."
+    },
+    "secrecy": { "type": "boolean", "default": false, "description": "Surprise: ship to the user, no notifications to the recipient." },
+    "ship_to": { "type": "string", "enum": ["self", "recipient"], "default": "self" },
+    "recipient": { "type": "object", "description": "Free-form notes about who the purchase is for." },
+    "benchmark_price": {
+      "type": "number", "minimum": 0,
+      "description": "Optional fair-price reference used for efficiency scoring."
+    }
+  },
+  "additionalProperties": false
+}

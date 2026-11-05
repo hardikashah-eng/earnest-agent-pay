@@ -1,0 +1,8 @@
+{
+  "agent_id": "agent_shopper",
+  "mandate_id": "m_software_001",
+  "amount": 45,
+  "merchant": "diagramtool.com",
+  "category": "software",
+  "reason": "One-time license, cheapest option that exports SVG"
+}

@@ -1,0 +1,8 @@
+{
+  "agent_id": "agent_shopper",
+  "mandate_id": "m_software_001",
+  "amount": 120,
+  "merchant": "diagramtool.com",
+  "category": "software",
+  "reason": "Pro tier has more templates"
+}

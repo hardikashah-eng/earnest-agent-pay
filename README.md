@@ -11,7 +11,64 @@ They ask the gateway to spend; the gateway decides based on three things:
 
 Approved requests get a scoped, expiring payment credential (a capped, single-use virtual card in test mode). The outcome feeds back into the trust score: limits **rise slowly** with good behavior and **fall sharply** on violations, like a credit line.
 
-> **Status: early design (v0.0).** Nothing here handles real money. Test and mock backends only.
+> **Status: v0.1.** Spec, gateway, mock payment backend, MCP server and demo. Nothing here handles real money: mock backend only.
+
+![Trust score over time for a faithful and a sloppy agent](demo/limits.svg)
+
+*Same user, same 40 tasks. The faithful agent reaches `trusted` and stops needing approval; the sloppy one ends up `restricted`.*
+
+## Quickstart
+
+Needs Python 3.10+. The core has no dependencies.
+
+```bash
+git clone https://github.com/hardikashah-eng/earnest-agent-pay.git
+cd earnest-agent-pay
+python -m earnest demo                # two-agent simulation, writes demo/limits.svg
+python -m unittest discover -s tests  # run the tests
+```
+
+```
+agent    final tier    score  accepted  violations  asked you  vs fair price
+steady   trusted       191.4        40           0          6          -8.3%
+sloppy   restricted    -53.8        22          15         25         +18.4%
+```
+
+### Try the flow yourself
+
+```bash
+python -m earnest profile examples/profile-frugal.json
+python -m earnest mandate examples/mandate-software.json
+python -m earnest request examples/request-subscription.json   # denied: you said no subscriptions
+python -m earnest request examples/request-ok.json             # escalated: new agent, new merchant
+python -m earnest pending --user user_demo
+python -m earnest approve <request_id>                         # issues a $45 single-use card
+python -m earnest outcome <request_id> accepted                # you rate it; the score updates
+python -m earnest limits --user user_demo --agent agent_shopper --task software
+```
+
+### Connect an agent over MCP
+
+```bash
+pip install -e ".[mcp]"
+```
+
+Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config):
+
+```json
+{
+  "mcpServers": {
+    "earnest": {
+      "command": "python",
+      "args": ["-m", "earnest.mcp_server"],
+      "cwd": "/path/to/earnest-agent-pay",
+      "env": { "EARNEST_DB": "earnest.db", "EARNEST_USER_ID": "user_demo", "EARNEST_AGENT_ID": "agent_shopper" }
+    }
+  }
+}
+```
+
+The agent gets three tools: `list_mandates`, `get_limits` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
 
 ---
 
@@ -34,13 +91,18 @@ Agent ──(spend request + reason)──▶ earnest gateway ──▶ payment 
 The gateway is exposed as an **MCP server**, so Claude or any MCP-capable agent can call tools like
 `request_spend(amount, merchant, category, reason)`.
 
-### Trust tiers (illustrative)
+Full rules and point values: [spec/SPEC.md](spec/SPEC.md).
+
+### Trust tiers
 
 | Tier | Per-transaction cap | Credential lifetime | Needs your approval |
 |---|---|---|---|
-| New | $25 | 1 hour, single use | Anything over $10 |
-| Established | $200 | 24 hours | Anything outside the mandate |
-| Trusted | $1,000 | 7 days | New merchants only |
+| Restricted (score < 0) | $0 | — | Everything |
+| New (0+) | $25 | 1 hour, single use | Over $10, or a new merchant |
+| Established (20+) | $200 | 24 hours, single use | Over $150, or a new merchant |
+| Trusted (60+) | $1,000 | 7 days | Over $500 |
+
+Anything outside the mandate (over budget, wrong category, blocked merchant, past deadline, against your hard rules) is denied at every tier and costs the agent 10 points. Your `autonomy` setting scales the approval thresholds.
 
 ### What earns trust
 
@@ -48,18 +110,25 @@ The gateway is exposed as an **MCP server**, so Claude or any MCP-capable agent 
 - **Efficiency**: scored *only for accepted outcomes*, as value against a benchmark. Underspending isn't rewarded by itself, since that invites cutting corners.
 - **Profile-aware**: a frugal user's agent scores well for waiting for a deal; a convenience-first user's agent doesn't.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
-spec/        JSON Schemas for profile, mandate, trust tiers + SPEC.md
-gateway/     MCP server, rules engine, scoring
-backends/    mock (default), stripe_issuing (test mode)
-demo/        two-agent simulation + limits-over-time chart
-examples/    sample mandates (surprise gift, frugal shopper, …)
-docs/        scope and design notes
+spec/              JSON Schemas (profile, mandate, spend request, decision, outcome), trust tiers, SPEC.md
+earnest/           the gateway
+  models.py        spec objects + validation
+  rules.py         decision procedure (approve / deny / escalate)
+  scoring.py       trust points and decay
+  ledger.py        SQLite ledger
+  gateway.py       ties it together
+  backends/mock.py simulated scoped, expiring cards
+  mcp_server.py    agent-facing MCP tools
+  cli.py           user-facing commands
+  simulate.py      two-agent demo
+examples/          sample profile, mandates and requests
+demo/limits.svg    demo chart
+tests/             unit tests
+docs/SCOPE.md      scope and roadmap
 ```
-
-See [docs/SCOPE.md](docs/SCOPE.md) for the initial scope and roadmap, and [spec/examples](spec/examples) for draft data examples.
 
 ## Related work
 

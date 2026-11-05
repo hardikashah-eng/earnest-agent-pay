@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hardikashah-eng/earnest-agent-pay/spec/outcome.schema.json",
+  "title": "Outcome",
+  "description": "The user's verdict on a completed purchase. Reported by the user, never by the agent.",
+  "type": "object",
+  "required": ["request_id", "verdict"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "verdict": { "type": "string", "enum": ["accepted", "rejected", "disputed"] },
+    "on_time": { "type": "boolean", "default": true },
+    "note": { "type": "string" }
+  },
+  "additionalProperties": false
+}
