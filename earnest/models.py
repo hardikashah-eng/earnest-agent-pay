@@ -67,6 +67,13 @@ def _no_extra(d: dict, allowed: set[str], what: str):
         raise ValidationError(f"{what} has unknown fields: {sorted(extra)}")
 
 
+def _quantity(d: dict) -> int:
+    v = d.get("quantity", 1)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        raise ValidationError("quantity must be a whole number >= 1")
+    return v
+
+
 HARD_RULES = {"no_subscriptions", "no_new_merchants", "no_international"}
 
 
@@ -79,6 +86,7 @@ class Profile:
     privacy: float = 0.5
     explanation_style: str = "plain"
     hard_rules: list[str] = field(default_factory=list)
+    min_confidence: float = 0.35  # below this purchase confidence, ask the user (confidence.py)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Profile":
@@ -92,6 +100,7 @@ class Profile:
             explanation_style=_string(d, "explanation_style", default="plain",
                                       choices={"plain", "brief_technical", "detailed"}),
             hard_rules=_strings(d, "hard_rules", choices=HARD_RULES),
+            min_confidence=_number(d, "min_confidence", default=0.35, lo=0, hi=1),
         )
 
     def to_dict(self) -> dict:
@@ -192,6 +201,7 @@ class SpendRequest:
     international: bool = False
     ask_first: bool = False
     item: str | None = None  # what's being bought; lets the gateway check purchase history
+    quantity: int = 1        # units in `amount`, so prices compare per unit
 
     @classmethod
     def from_dict(cls, d: dict) -> "SpendRequest":
@@ -210,12 +220,15 @@ class SpendRequest:
             international=_bool(d, "international"),
             ask_first=_bool(d, "ask_first"),
             item=_string(d, "item"),
+            quantity=_quantity(d),
         )
 
     def to_dict(self) -> dict:
         out = {k: getattr(self, k) for k in self.__dataclass_fields__}
         if out["item"] is None:
             del out["item"]
+        if out["quantity"] == 1:
+            del out["quantity"]
         return out
 
 

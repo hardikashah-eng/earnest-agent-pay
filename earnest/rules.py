@@ -21,7 +21,7 @@ class Verdict:
 def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: Tier,
                    spent: float, is_new_merchant: bool, now: datetime,
                    merchant: MerchantCheck | None, history: History | None,
-                   high_risk_category: bool) -> Verdict:
+                   high_risk_category: bool, confidence: dict | None) -> Verdict:
     # --- Deny: these are violations of what the user said ---
     deny: list[str] = []
     if mandate.deadline is not None and now.date() > mandate.deadline:
@@ -49,10 +49,15 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
         esc.append("tier_restricted")
     if mandate.approval in ("always", "shortlist"):
         esc.append(f"mandate_requires_approval:{mandate.approval}")
+    routine = confidence is not None and "routine_repeat_purchase" in confidence["signals"]
     if req.amount > tier.cap:
         esc.append("above_tier_cap")
-    elif req.amount > tier.effective_approval_over(profile.autonomy):
+    elif req.amount > tier.effective_approval_over(profile.autonomy) and not routine:
+        # a high-confidence repeat of something the user bought and kept, at a price in
+        # range, doesn't need the approval threshold; the tier cap still applies
         esc.append("above_approval_threshold")
+    if confidence is not None and confidence["score"] < profile.min_confidence:
+        esc.append(f"low_confidence:{confidence['score']:.2f}")
     if merchant is not None and merchant.status == "suspicious":
         esc.extend(merchant.reasons)
     if high_risk_category:
@@ -71,9 +76,9 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
 def decide(req: SpendRequest, mandate: Mandate, profile: Profile, tier: Tier,
            spent: float, is_new_merchant: bool, now: datetime,
            merchant: MerchantCheck | None = None, history: History | None = None,
-           high_risk_category: bool = False) -> Verdict:
+           high_risk_category: bool = False, confidence: dict | None = None) -> Verdict:
     base = _base_decision(req, mandate, profile, tier, spent, is_new_merchant, now,
-                          merchant, history, high_risk_category)
+                          merchant, history, high_risk_category, confidence)
     if not req.ask_first:
         return base
     # The agent asked before acting. Reward it only if asking was actually needed.

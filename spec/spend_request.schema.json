@@ -20,7 +20,11 @@
     },
     "item": {
       "type": "string",
-      "description": "What is being bought (e.g. 'AA batteries, 24 pack'). Optional; lets the gateway match the user's past purchases at this merchant."
+      "description": "What is being bought (e.g. 'AA batteries, 24 pack'). Optional; lets the gateway match the user's past purchases, order history and interests."
+    },
+    "quantity": {
+      "type": "integer", "minimum": 1, "default": 1,
+      "description": "Units covered by amount, so prices are compared per unit."
     }
   },
   "additionalProperties": false

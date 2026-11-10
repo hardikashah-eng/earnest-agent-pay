@@ -6,7 +6,7 @@ from pathlib import Path
 
 from earnest import Gateway, MerchantRegistry, SpendRequest
 from earnest.cli import main as cli_main
-from earnest.history import PastPurchase, confidence, item_similarity, summarize
+from earnest.history import PastPurchase, item_similarity, summarize
 from earnest.insights import TransactionStore
 from earnest.insights.statement import Transaction
 from earnest.merchants import DATA_FILE, host_of, merchant_keys
@@ -110,37 +110,39 @@ class TestRegistry(unittest.TestCase):
 
 
 class TestHistory(unittest.TestCase):
-    def past(self, item, verdict="accepted", amount=20.0, merchant="amazon.com"):
-        return PastPurchase(frozenset(REG.canonical(merchant)), amount, date(2026, 10, 1), "earnest",
-                            item, verdict)
+    TODAY = date(2026, 11, 1)
+
+    def past(self, item, verdict="accepted", amount=20.0, merchant="amazon.com", on=date(2026, 10, 1)):
+        return PastPurchase(frozenset(REG.canonical(merchant)), amount, on, "earnest", item, verdict)
 
     def test_item_similarity(self):
         self.assertEqual(item_similarity("AA Batteries 24 pack", "aa battery 24"), 1.0)
         self.assertGreaterEqual(item_similarity("Anker USB-C cable 6ft", "Anker USB-C cable 3ft"), 0.4)
         self.assertLess(item_similarity("USB-C cable", "garden hose"), 0.4)
+        # brand words in retail titles don't hide the same item; AA is not AAA
+        self.assertGreaterEqual(item_similarity("AA batteries 24 pack", "Amazon Basics AA Batteries, 24 Pack"), 0.8)
+        self.assertLess(item_similarity("AAA batteries 24 pack", "Amazon Basics AA Batteries, 24 Pack"), 0.4)
 
     def test_same_similar_and_other_merchant(self):
         keys = REG.canonical("Amazon")
         past = [self.past("AA batteries 24 pack"), self.past("AAA batteries 24 pack"),
                 self.past("AA batteries 24 pack", merchant="target.com")]
-        h = summarize(keys, past, "aa batteries 24 pack", 20)
-        self.assertEqual((h.merchant_purchases, h.same_item, h.similar_item), (2, 1, 1))
+        h = summarize(keys, past, "aa batteries 24 pack", self.TODAY)
+        self.assertEqual((h.merchant_purchases, h.same_item, h.similar_item, h.same_item_elsewhere),
+                         (2, 1, 1, 1))
+        self.assertEqual(h.same_item_prices, [20.0, 20.0])
 
-    def test_rejected_item_and_price_jump(self):
+    def test_rejected_item(self):
         keys = REG.canonical("amazon.com")
-        h = summarize(keys, [self.past("desk lamp", verdict="rejected")], "desk lamp", 20)
+        h = summarize(keys, [self.past("desk lamp", verdict="rejected")], "desk lamp", self.TODAY)
         self.assertEqual(h.rejected_before, 1)
         self.assertIn("previous_purchase_rejected", h.signals)
-        h = summarize(keys, [self.past("desk lamp", amount=20)], "desk lamp", 40)
-        self.assertIn("price_above_previous", h.signals)
 
-    def test_confidence_levels(self):
+    def test_old_prices_are_not_a_reference(self):
         keys = REG.canonical("amazon.com")
-        repeat = summarize(keys, [self.past("desk lamp")], "desk lamp", 20)
-        self.assertEqual(confidence(REG.check("amazon.com"), repeat)["level"], "high")
-        none = summarize(keys, [], "desk lamp", 20)
-        self.assertEqual(confidence(REG.check("amazon.com"), none)["level"], "medium")
-        self.assertEqual(confidence(REG.check("amaz0n.com"), repeat)["score"], 0.0)
+        h = summarize(keys, [self.past("desk lamp", on=date(2025, 6, 1))], "desk lamp", self.TODAY)
+        self.assertEqual(h.same_item, 1)          # still counts as bought before
+        self.assertEqual(h.same_item_prices, [])  # but its price is too old to compare
 
 
 class TestGatewayDecisions(unittest.TestCase):

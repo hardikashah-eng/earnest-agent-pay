@@ -39,8 +39,10 @@ Next for insights: receipt / order import for item-level advice ("buy X at Y ins
 - Default known-good list of top e-commerce merchants; lookalike, suspicious-domain and high-risk-category detection; user trusted / untrusted lists and blocklist import.
 - Purchase history (earnest purchases + imported statements) as a confidence signal, with same / similar item matching.
 - `check_merchant` MCP tool; `confidence` on every decision.
+- Retailer order-history import (Amazon export, generic CSV for Costco / Walmart / Target), memberships and interests (wishlist / cart).
+- Weighted purchase confidence (authenticity, price vs. recent purchases, history / interest, budget) used on every request: low confidence escalates, routine repeats skip the approval threshold.
 
-Next: a maintained blocklist feed connector, item data from receipts for statement purchases, and per-category verified lists outside the US.
+Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer APIs, email receipts), and per-category verified lists outside the US.
 
 ## Next (v0.2+)
 

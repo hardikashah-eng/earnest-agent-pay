@@ -40,18 +40,21 @@ def get_limits(task_type: str) -> dict:
 
 
 @mcp.tool()
-def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category: str = "") -> dict:
-    """Check a merchant before you buy. Returns its trust status (verified, user_trusted,
-    unknown, suspicious or untrusted), whether the user has bought here before (and the same
-    or a similar item), and an overall confidence level. Untrusted merchants and lookalikes
-    of well-known stores are denied; buying from them costs trust. Prefer verified merchants
-    and ones the user already buys from."""
-    return _gateway.check_merchant(USER_ID, merchant, item or None, amount, category or None)
+def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category: str = "",
+                   mandate_id: str = "", quantity: int = 1) -> dict:
+    """Score a purchase before you request it. Returns a 0-1 confidence with four factors:
+    merchant authenticity (verified store, user's membership or history), price (vs what the
+    user paid for this or similar items in the last year), familiarity (bought before, or on
+    the user's wishlist / interests) and budget headroom on the mandate. Untrusted merchants
+    and lookalikes of well-known stores are denied and cost trust; low confidence goes to
+    the user. Prefer the merchant and price that score highest."""
+    return _gateway.check_merchant(USER_ID, merchant, item or None, amount, category or None,
+                                   mandate_id or None, quantity)
 
 
 @mcp.tool()
 def request_spend(mandate_id: str, amount: float, merchant: str, category: str, reason: str,
-                  item: str = "", recurring: bool = False, international: bool = False,
+                  item: str = "", quantity: int = 1, recurring: bool = False, international: bool = False,
                   ask_first: bool = False) -> dict:
     """Ask to spend money for a mandate. Returns approved (with a scoped, expiring card),
     escalated (waiting for the user) or denied, plus a confidence block. Name the `item` you
@@ -66,6 +69,8 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
         }
         if item:
             payload["item"] = item
+        if quantity != 1:
+            payload["quantity"] = quantity
         return _gateway.request_spend(payload).to_dict()
     except ValidationError as e:
         return {"status": "invalid", "error": str(e)}

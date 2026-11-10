@@ -26,11 +26,22 @@
     },
     "confidence": {
       "type": "object",
-      "description": "Merchant trust and purchase-history signals (SPEC.md sections 3a, 3b). Informational; the decision is in status and reasons.",
-      "required": ["level", "score", "merchant", "history", "signals"],
+      "description": "Purchase confidence (SPEC.md sections 3a-3c). Low scores and routine repeats affect the decision; the reasons say how.",
+      "required": ["level", "score", "factors", "merchant", "history", "signals"],
       "properties": {
         "level": { "type": "string", "enum": ["low", "medium", "high"] },
         "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "factors": {
+          "type": "object",
+          "description": "Each 0-1 with a plain-language why.",
+          "properties": {
+            "authenticity": { "$ref": "#/$defs/factor" },
+            "price": { "$ref": "#/$defs/factor" },
+            "familiarity": { "$ref": "#/$defs/factor" },
+            "budget": { "$ref": "#/$defs/factor" }
+          }
+        },
+        "weights": { "type": "object", "additionalProperties": { "type": "number" } },
         "merchant": {
           "type": "object",
           "required": ["merchant", "status", "reasons"],
@@ -47,16 +58,29 @@
           "properties": {
             "merchant_purchases": { "type": "integer" },
             "from_statements": { "type": "integer" },
+            "from_orders": { "type": "integer" },
             "same_item": { "type": "integer" },
             "similar_item": { "type": "integer" },
+            "same_item_elsewhere": { "type": "integer" },
             "rejected_before": { "type": "integer" },
             "last_purchase": { "type": "string", "format": "date" },
+            "last_same_item": { "type": "string", "format": "date" },
             "typical_amount": { "type": "number" },
-            "item_typical_amount": { "type": "number" }
+            "same_item_price_range": { "type": "array", "items": { "type": "number" } },
+            "similar_item_price_range": { "type": "array", "items": { "type": "number" } },
+            "interest": { "type": "object" },
+            "memberships": { "type": "array", "items": { "type": "string" } }
           }
         },
         "signals": { "type": "array", "items": { "type": "string" } }
       }
+    }
+  },
+  "$defs": {
+    "factor": {
+      "type": "object",
+      "required": ["score", "why"],
+      "properties": { "score": { "type": "number", "minimum": 0, "maximum": 1 }, "why": { "type": "string" } }
     }
   }
 }

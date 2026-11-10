@@ -9,6 +9,10 @@
     python -m earnest limits --user user_demo --agent agent_shopper --task software
     python -m earnest merchant check amazon.com --user user_demo --item "usb-c cable"
     python -m earnest merchant distrust sketchy-deals.shop --user user_demo
+    python -m earnest orders import Retail.OrderHistory.1.csv --user user_demo
+    python -m earnest orders import costco-receipts.csv --retailer costco.com --user user_demo
+    python -m earnest membership add costco.com --program executive --user user_demo
+    python -m earnest interest add "standing desk" --max-price 350 --user user_demo
     python -m earnest demo
 """
 from __future__ import annotations
@@ -70,7 +74,8 @@ def _insights_cmd(args, gw: Gateway) -> int:
 
 def _merchant_cmd(args, gw: Gateway) -> int:
     if args.action == "check":
-        _print(gw.check_merchant(args.user, args.merchant, args.item, args.amount or 0.0, args.category))
+        _print(gw.check_merchant(args.user, args.merchant, args.item, args.amount or 0.0, args.category,
+                                 args.mandate, args.quantity))
     elif args.action == "trust":
         gw.trust_merchant(args.user, args.merchant, args.reason or "user")
         print(f"trusted {args.merchant}")
@@ -92,6 +97,43 @@ def _merchant_cmd(args, gw: Gateway) -> int:
                 gw.distrust_merchant(args.user, entry, args.reason or f"blocklist:{Path(args.merchant).name}")
                 added += 1
         print(f"added {added} untrusted merchants from {args.merchant}")
+    return 0
+
+
+def _context_cmd(args, gw: Gateway) -> int:
+    """orders / interest / membership: the user's purchase context."""
+    from .insights.orders import parse_orders_csv, parse_wishlist_csv
+
+    if args.cmd == "orders":
+        if args.action == "import":
+            text = Path(args.file).read_text(encoding="utf-8-sig")
+            orders = parse_orders_csv(text, args.user, args.retailer)
+            added, dupes = gw.import_orders(args.user, orders, f"file:{Path(args.file).name}")
+            _print({"file": Path(args.file).name, "added": added, "duplicates": dupes})
+        else:
+            rows = gw.ledger.orders(args.user)
+            _print(rows[-args.last:] if args.last else rows)
+    elif args.cmd == "interest":
+        if args.action == "add":
+            iid = gw.add_interest(args.user, args.value, args.merchant, args.max_price, args.source)
+            print(f"added interest {iid}: {args.value}")
+        elif args.action == "import":
+            items = parse_wishlist_csv(Path(args.value).read_text(encoding="utf-8-sig"), args.merchant)
+            for w in items:
+                gw.add_interest(args.user, w.item, w.merchant, w.max_price, args.source or "wishlist")
+            print(f"added {len(items)} interests from {args.value}")
+        elif args.action == "remove":
+            print("removed" if gw.ledger.remove_interest(args.user, int(args.value)) else "no such interest")
+        else:
+            _print(gw.ledger.interests(args.user))
+    elif args.cmd == "membership":
+        if args.action == "add":
+            gw.add_membership(args.user, args.merchant, args.program)
+            print(f"added {args.program} membership at {args.merchant}")
+        elif args.action == "remove":
+            print("removed" if gw.ledger.remove_membership(args.user, args.merchant) else "no such membership")
+        else:
+            _print(gw.ledger.memberships(args.user))
     return 0
 
 
@@ -127,6 +169,27 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--amount", type=float)
     p.add_argument("--category")
     p.add_argument("--reason")
+    p.add_argument("--mandate", help="for check: score against this mandate's budget")
+    p.add_argument("--quantity", type=int, default=1)
+
+    p = sub.add_parser("orders", help="import retailer order history (Amazon, Costco, Walmart, Target, ...)")
+    p.add_argument("action", choices=["import", "list"])
+    p.add_argument("file", nargs="?")
+    p.add_argument("--user", required=True)
+    p.add_argument("--retailer", help="merchant for files without a retailer column, e.g. costco.com")
+    p.add_argument("--last", type=int, help="for list: only the latest N")
+    p = sub.add_parser("interest", help="things you want, so agents can match them (wishlist, cart, ...)")
+    p.add_argument("action", choices=["add", "import", "remove", "list"])
+    p.add_argument("value", nargs="?", help="item text (add), CSV file (import) or id (remove)")
+    p.add_argument("--user", required=True)
+    p.add_argument("--merchant", help="only at this merchant")
+    p.add_argument("--max-price", type=float)
+    p.add_argument("--source", default=None, help="user, wishlist or cart")
+    p = sub.add_parser("membership", help="store memberships (Prime, Costco, Walmart+, Target Circle)")
+    p.add_argument("action", choices=["add", "remove", "list"])
+    p.add_argument("merchant", nargs="?")
+    p.add_argument("--user", required=True)
+    p.add_argument("--program", default="member", help="e.g. prime, executive, walmart+, circle")
     p = sub.add_parser("demo", help="run the two-agent simulation and write a chart")
     p.add_argument("--out", default="demo/limits.svg")
     p.add_argument("--days", type=int, default=40)
@@ -181,6 +244,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.action != "list" and not args.merchant:
                 ap.error(f"merchant {args.action} needs a merchant")
             return _merchant_cmd(args, gw)
+        elif args.cmd in ("orders", "interest", "membership"):
+            needs = {"orders": ("import",), "interest": ("add", "import", "remove"),
+                     "membership": ("add", "remove")}[args.cmd]
+            target = getattr(args, "file", None) or getattr(args, "value", None) or getattr(args, "merchant", None)
+            if args.action in needs and not target:
+                ap.error(f"{args.cmd} {args.action} needs an argument")
+            if args.cmd == "interest" and args.action == "add" and args.source is None:
+                args.source = "user"
+            return _context_cmd(args, gw)
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
         elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):
