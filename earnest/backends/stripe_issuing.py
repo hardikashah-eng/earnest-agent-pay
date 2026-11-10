@@ -111,19 +111,23 @@ class StripeIssuingBackend:
         self.last_decision: str | None = None
 
     def issue(self, *, cap: float, currency: str, merchant: str, lifetime_hours: float,
-              single_use: bool, now: datetime, item: str | None = None) -> Credential:
+              single_use: bool, now: datetime, item: str | None = None,
+              product_id: str | None = None) -> Credential:
         expires = now + timedelta(hours=lifetime_hours)
         metadata = {"earnest_merchant_lock": merchant, "earnest_expires_at": expires.isoformat(),
                     "earnest_single_use": "1" if single_use else "0", "earnest_cap": f"{cap:.2f}"}
         if item:
             metadata["earnest_item_lock"] = item[:500]
+        if product_id:
+            metadata["earnest_product_lock"] = product_id
         card = self.call("POST", "/v1/issuing/cards", {
             "cardholder": self.cardholder_id, "currency": currency.lower(), "type": "virtual",
             "status": "active", "metadata": metadata,
             "spending_controls": {"spending_limits": [
                 {"amount": int(round(cap * 100)), "interval": "all_time"}]},
         })
-        return Credential(card["id"], round(cap, 2), currency, merchant, expires, single_use, self.name, item)
+        return Credential(card["id"], round(cap, 2), currency, merchant, expires, single_use, self.name, item,
+                          product_id)
 
     def cancel(self, card_id: str) -> None:
         self.call("POST", f"/v1/issuing/cards/{card_id}", {"status": "canceled"})
@@ -145,7 +149,7 @@ class StripeIssuingBackend:
         if amount > float(meta.get("earnest_cap", "0")) + 1e-9:
             return False, "over_cap"
         if meta.get("earnest_item_lock") and line_items is not None:
-            ok, reason = check_cart(meta["earnest_item_lock"], line_items)
+            ok, reason = check_cart(meta["earnest_item_lock"], line_items, meta.get("earnest_product_lock"))
             if not ok:
                 return False, reason
         return True, "approved"

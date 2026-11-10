@@ -48,7 +48,7 @@ def get_limits(task_type: str) -> dict:
 
 @mcp.tool()
 def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category: str = "",
-                   mandate_id: str = "", quantity: int = 1) -> dict:
+                   mandate_id: str = "", quantity: int = 1, product_id: str = "") -> dict:
     """Score a purchase before you request it. Returns a 0-1 confidence with four factors:
     merchant authenticity (verified store, user's membership or history), price (vs what the
     user paid for this or similar items in the last year), familiarity (bought before, or on
@@ -56,12 +56,12 @@ def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category:
     and lookalikes of well-known stores are denied and cost trust; low confidence goes to
     the user. Prefer the merchant and price that score highest."""
     return _gateway.check_merchant(USER_ID, merchant, item or None, amount, category or None,
-                                   mandate_id or None, quantity)
+                                   mandate_id or None, quantity, product_id or None)
 
 
 @mcp.tool()
 def request_spend(mandate_id: str, amount: float, merchant: str, category: str, reason: str,
-                  item: str = "", quantity: int = 1, recurring: bool = False, international: bool = False,
+                  item: str = "", quantity: int = 1, product_id: str = "", recurring: bool = False, international: bool = False,
                   ask_first: bool = False) -> dict:
     """Ask to spend money for a mandate. Returns approved (with a scoped, expiring card),
     escalated (waiting for the user) or denied, plus a confidence block. Name the `item` you
@@ -78,6 +78,8 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
             payload["item"] = item
         if quantity != 1:
             payload["quantity"] = quantity
+        if product_id:
+            payload["product_id"] = product_id  # ASIN or UPC/GTIN from the product page
         return _gateway.request_spend(payload).to_dict()
     except ValidationError as e:
         return {"status": "invalid", "error": str(e)}

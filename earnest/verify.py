@@ -38,7 +38,8 @@ class LineItem:
 
     @classmethod
     def from_dict(cls, d: dict) -> "LineItem":
-        return cls(str(d["item"]), float(d["amount"]), int(d.get("quantity", 1)), d.get("product_id"))
+        from .products import normalize
+        return cls(str(d["item"]), float(d["amount"]), int(d.get("quantity", 1)), normalize(d.get("product_id")))
 
 
 def item_matches(claim: str, item: str, claim_id: str | None = None, item_id: str | None = None) -> bool:

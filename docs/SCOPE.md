@@ -50,6 +50,11 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 - AP2 interop: Intent mandate export with an earnest attestation; Cart mandate checks before paying.
 - Approvals in Slack, Lark / Feishu, ntfy push or any webhook, with signed expiring one-tap links and a confirm page (`earnest serve`).
 
+## Data (v0.3) — done
+
+- Email receipts from mbox (Google Takeout), Maildir, .eml or IMAP, read only from verified merchant domains with DKIM pass; refunds/returns skipped; order + shipping emails deduplicated.
+- Product IDs (ASIN, GTIN with check digit, retailer SKU) from exports, receipt links and agent requests; used for same-item matching and cart checks.
+
 ## Next (v0.2+)
 
 - Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.

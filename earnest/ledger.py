@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS merchant_lists (
 );
 CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, merchant TEXT NOT NULL, item TEXT NOT NULL,
-    unit_price REAL NOT NULL, quantity INTEGER NOT NULL, date TEXT NOT NULL, source TEXT NOT NULL
+    unit_price REAL NOT NULL, quantity INTEGER NOT NULL, date TEXT NOT NULL, source TEXT NOT NULL,
+    product_id TEXT
 );
 CREATE INDEX IF NOT EXISTS orders_user ON orders (user_id, date);
 CREATE TABLE IF NOT EXISTS interests (
@@ -60,6 +61,14 @@ class Ledger:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns that newer versions expect to databases made by older ones."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(orders)")}
+        if "product_id" not in cols:
+            with self.db:
+                self.db.execute("ALTER TABLE orders ADD COLUMN product_id TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -140,6 +149,7 @@ class Ledger:
                         "verification": r["verification"],
                         "merchant": r["merchant"], "amount": r["amount"], "at": r["created_at"],
                         "item": data.get("item"), "quantity": data.get("quantity", 1),
+                        "product_id": data.get("product_id"),
                         "verdict": json.loads(r["outcome"])["verdict"] if r["outcome"] else None})
         return out
 
@@ -159,14 +169,15 @@ class Ledger:
         with self.db:
             for o in orders:
                 added += self.db.execute(
-                    "INSERT OR IGNORE INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO orders (id, user_id, merchant, item, unit_price, quantity, date, "
+                    "source, product_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (o.id, user_id, o.merchant, o.item, o.unit_price, o.quantity, o.date.isoformat(),
-                     source)).rowcount
+                     source, getattr(o, "product_id", None))).rowcount
         return added, len(orders) - added
 
     def orders(self, user_id: str) -> list[dict]:
         return [dict(r) for r in self.db.execute(
-            "SELECT merchant, item, unit_price, quantity, date, source FROM orders "
+            "SELECT merchant, item, unit_price, quantity, date, source, product_id FROM orders "
             "WHERE user_id = ? ORDER BY date", (user_id,))]
 
     def add_interest(self, user_id: str, item: str, merchant: str | None, max_price: float | None,

@@ -103,6 +103,15 @@ python -m earnest merchant import-blocklist fraud-feed.txt --user user_demo   # 
 
 **Agents can't fake the item.** Cards are locked to the claimed item: a cart without it is declined. Orders are reconciled after the fact (`earnest reconcile`); a mismatch costs −10 and suspends the routine pass for 90 days.
 
+**Email receipts** cover stores without an order export (Costco, Walmart, Target, …). Only mail from a verified merchant's domain with a DKIM pass is read, refunds and returns are skipped, and an order's confirmation and shipping emails count once:
+
+```bash
+python -m earnest receipts import ~/Downloads/Takeout/Mail/Purchases.mbox --user user_demo   # mbox, Maildir, .eml
+EARNEST_IMAP_PASSWORD=app-password python -m earnest receipts imap --host imap.gmail.com --username me@gmail.com --days 180 --user user_demo
+```
+
+**Product IDs** (ASIN, UPC / EAN / GTIN, retailer item numbers) come from order exports, product links in receipts, and the agent's `product_id`. When both sides have one, the ID decides "same item", for history and for checkout checks.
+
 Card statements (`earnest import`, below) also count: a store on your card bill is a store you know. Rules and numbers: [spec/SPEC.md](spec/SPEC.md) sections 3a–3c.
 
 ## Real cards (Stripe test mode), AP2 and approvals on your phone

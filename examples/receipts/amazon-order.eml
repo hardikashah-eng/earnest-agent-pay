@@ -1,0 +1,19 @@
+From: "Amazon.com" <auto-confirm@amazon.com>
+To: you@example.com
+Subject: Your Amazon.com order #112-0000000-1234567
+Date: Tue, 04 Nov 2026 09:12:00 -0800
+Authentication-Results: mx.example.com; dkim=pass header.i=@amazon.com header.s=example; spf=pass
+X-Earnest-Example: synthetic test fixture, not a real order
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>td{padding:4px}</style></head><body>
+<h2>Order Confirmation</h2>
+<p>Order #112-0000000-1234567</p>
+<table>
+<tr><td><a href="https://www.amazon.com/Amazon-Basics-Batteries/dp/B00MNV8E0C?ref=x">Amazon Basics AA Batteries, 24 Pack</a></td><td>Qty: 1</td><td>$16.49</td></tr>
+<tr><td><a href="https://www.amazon.com/gp/product/B0TESTCAB1">Anker USB-C to USB-C Cable 6ft</a></td><td>Qty: 2</td><td>$25.98</td></tr>
+<tr><td>Item Subtotal:</td><td>$42.47</td></tr>
+<tr><td>Estimated tax:</td><td>$3.50</td></tr>
+<tr><td>Order Total:</td><td>$45.97</td></tr>
+</table></body></html>

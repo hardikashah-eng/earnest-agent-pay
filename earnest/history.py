@@ -34,6 +34,7 @@ class PastPurchase:
     source: str                  # "earnest" | "order" | "statement"
     item: str | None = None
     verdict: str | None = None   # accepted | rejected | disputed | None (no outcome / not earnest)
+    product_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -118,8 +119,21 @@ def _recent(prices: list[tuple[date, float]], today: date) -> list[float]:
     return [round(a, 2) for _, a in keep]
 
 
+def match_level(item: str, product_id: str | None, other_item: str, other_id: str | None) -> str | None:
+    """'same', 'similar' or None. Product IDs, when both are known, decide 'same'."""
+    sim = item_similarity(item, other_item)
+    if product_id and other_id:
+        if product_id == other_id:
+            return "same"
+        return "similar" if sim >= SIMILAR_ITEM else None
+    if sim >= SAME_ITEM:
+        return "same"
+    return "similar" if sim >= SIMILAR_ITEM else None
+
+
 def summarize(keys: set[str], past: list[PastPurchase], item: str | None, today: date,
-              interests: list[Interest] = (), memberships: list[str] = ()) -> History:
+              interests: list[Interest] = (), memberships: list[str] = (),
+              product_id: str | None = None) -> History:
     h = History(memberships=list(memberships))
     here = [p for p in past if keys & p.merchant_keys]
     good = [p for p in here if p.verdict not in ("rejected", "disputed")]
@@ -136,15 +150,15 @@ def summarize(keys: set[str], past: list[PastPurchase], item: str | None, today:
         for p in past:
             if not p.item:
                 continue
-            sim = item_similarity(item, p.item)
-            if sim < SIMILAR_ITEM:
+            level = match_level(item, product_id, p.item, p.product_id)
+            if level is None:
                 continue
             at_this_merchant = bool(keys & p.merchant_keys)
             if p.verdict in ("rejected", "disputed"):
                 if at_this_merchant:
                     h.rejected_before += 1
                 continue
-            if sim >= SAME_ITEM:
+            if level == "same":
                 same_prices.append((p.on, p.amount))
                 if at_this_merchant:
                     h.same_item += 1

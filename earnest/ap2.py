@@ -63,11 +63,13 @@ def intent_mandate(*, description: str, merchant: str, amount: float, currency: 
 
 def cart_line_items(cart_mandate: dict) -> list[LineItem]:
     details = cart_mandate["contents"]["payment_request"]["details"]
-    return [LineItem(d["label"], float(d["amount"]["value"])) for d in details.get("display_items", [])]
+    from .products import normalize
+    return [LineItem(d["label"], float(d["amount"]["value"]), product_id=normalize(d.get("sku") or d.get("product_id")))
+            for d in details.get("display_items", [])]
 
 
 def check_cart_mandate(cart_mandate: dict, *, merchant_lock: str, cap: float, currency: str,
-                       item_lock: str | None, now: datetime) -> tuple[bool, str]:
+                       item_lock: str | None, now: datetime, product_lock: str | None = None) -> tuple[bool, str]:
     """Can the approved request pay this AP2 cart?"""
     from .merchants import MerchantRegistry
     reg = MerchantRegistry.default()
@@ -84,7 +86,7 @@ def check_cart_mandate(cart_mandate: dict, *, merchant_lock: str, cap: float, cu
     if float(total.get("value", 0)) > cap + 1e-9:
         return False, "over_cap"
     if item_lock:
-        ok, reason = check_cart(item_lock, cart_line_items(cart_mandate))
+        ok, reason = check_cart(item_lock, cart_line_items(cart_mandate), product_lock)
         if not ok:
             return False, reason
     return True, "cart_ok"
