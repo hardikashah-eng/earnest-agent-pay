@@ -44,13 +44,18 @@ Next for insights: receipt / order import for item-level advice ("buy X at Y ins
 
 Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer APIs, email receipts), and per-category verified lists outside the US.
 
+## Real money rails and approvals (v0.3) — done
+
+- `stripe_issuing` backend (test mode only; live keys refused): capped virtual cards, real-time authorization webhook enforcing merchant, expiry, cap, single use and item lock.
+- AP2 interop: Intent mandate export with an earnest attestation; Cart mandate checks before paying.
+- Approvals in Slack, Lark / Feishu, ntfy push or any webhook, with signed expiring one-tap links and a confirm page (`earnest serve`).
+
 ## Next (v0.2+)
 
-- `stripe_issuing` backend in test mode: single-use capped virtual cards, real-time authorization webhook enforcing the mandate.
 - Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.
 - Learn profile from approvals and rejections (revealed preference), with the user able to see and edit it.
 - Modes: personal / work / gift.
-- Simple web UI for approvals and outcome feedback.
+- Outcome feedback from the approval page.
 - Migrate the MCP server to the mcp 2.x SDK (currently pinned to 1.x).
 - Rate-limit `ask_first` so an agent can't flood the user with questions.
 

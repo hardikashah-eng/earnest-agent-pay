@@ -3,6 +3,7 @@ user's own trusted/untrusted merchant lists."""
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS interests (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, item TEXT NOT NULL,
     merchant TEXT, max_price REAL, source TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (credential_id TEXT PRIMARY KEY, request_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS verifications (
     request_id TEXT PRIMARY KEY, status TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
@@ -54,7 +56,8 @@ CREATE TABLE IF NOT EXISTS memberships (
 
 class Ledger:
     def __init__(self, path: str = ":memory:"):
-        self.db = sqlite3.connect(path)
+        # `earnest serve` uses worker threads; it serializes access with a lock
+        self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
 
@@ -222,6 +225,17 @@ class Ledger:
         return [dict(r) for r in self.db.execute(
             "SELECT DISTINCT merchant, status, reason, at FROM merchant_lists WHERE user_id = ? "
             "ORDER BY status, merchant", (user_id,))]
+
+    # --- local secrets (approval links, attestations) ---
+    def secret(self, name: str) -> bytes:
+        """A random per-database secret, created on first use. Never leaves the machine."""
+        row = self.db.execute("SELECT value FROM settings WHERE name = ?", (f"secret:{name}",)).fetchone()
+        if row:
+            return bytes.fromhex(row["value"])
+        value = os.urandom(32)
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO settings VALUES (?, ?)", (f"secret:{name}", value.hex()))
+        return self.secret(name)
 
     # --- credentials & verification ---
     def link_credential(self, credential_id: str, request_id: str) -> None:
