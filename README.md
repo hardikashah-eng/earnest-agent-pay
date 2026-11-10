@@ -70,25 +70,38 @@ Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config
 
 The agent gets four tools: `list_mandates`, `get_limits`, `check_merchant` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
 
-## Merchant trust and purchase history
+## Merchant trust and purchase confidence
 
-Every request is checked against **who the merchant is** and **what you've bought before**:
+Every request gets a **confidence score** (0–1) from four things, each with a plain-language reason:
 
-- **Known-good list**: ~40 top e-commerce merchants (Amazon, Walmart, Target, Costco, Best Buy, Apple, …) with their real domains and statement aliases, in [earnest/data/merchant_trust.json](earnest/data/merchant_trust.json). A verified merchant doesn't trigger the "new merchant" approval.
-- **Untrusted**: lookalikes of those merchants (`amaz0n.com`, `arnazon.com`, `amazon-giftcards.shop`, `targett.com`) and anything on your blocklist are **denied**, and count as a violation. Suspicious domains (a brand on an unlisted domain, abused TLDs, phishing words like `login` / `refund`) and hard-to-reverse payment rails (gift cards, crypto, wire transfers) are **escalated** to you.
-- **Your purchase history**: if the agent names the `item`, the gateway looks for the same or a similar item from the same merchant in past earnest purchases and your imported statements. A repeat purchase you kept raises confidence; one you rejected makes the gateway ask you first; a big price jump is flagged.
+| Factor | Weight | High when |
+|---|---|---|
+| Merchant authenticity | 35% | it's a verified store, you're a member there (Prime, Costco, Walmart+, Target Circle), or you've bought there before |
+| Price | 25% | it's in the range you paid for the same item (or similar items) in the last year |
+| Purchase history / interest | 25% | you bought this or something like it before, or it's on your wishlist / interest list |
+| Budget | 15% | the mandate's remaining budget easily covers it |
 
-Each decision includes a `confidence` block (low / medium / high and why). Your own lists always win:
+Low confidence (below your profile's `min_confidence`, default 0.35) goes to you for approval. A **routine repeat** (same item, same store, price in range, high confidence) skips the approval threshold but never the tier cap.
+
+**Merchant lists.** ~40 top e-commerce merchants with their real domains and statement aliases are verified ([earnest/data/merchant_trust.json](earnest/data/merchant_trust.json)). Lookalikes (`amaz0n.com`, `arnazon.com`, `amazon-giftcards.shop`, `targett.com`) and your blocklist are **denied** and count as a violation. Suspicious domains and hard-to-reverse payment rails (gift cards, crypto, wire transfers) are escalated. Your own lists always win.
+
+**What you've bought and want.** Order history carries the items that card bills don't:
 
 ```bash
-python -m earnest merchant check amazon.com --user user_demo --item "AA batteries 24 pack"
+# Amazon: Account > Request your data > Your Orders (Retail.OrderHistory.*.csv)
+python -m earnest orders import examples/orders/amazon-order-history.csv --user user_demo
+# Costco / Walmart / Target receipts: any CSV with date, item, price
+python -m earnest orders import examples/orders/costco-receipts.csv --retailer costco.com --user user_demo
+python -m earnest membership add costco.com --program executive --user user_demo
+python -m earnest interest import examples/orders/wishlist.csv --user user_demo
+python -m earnest interest add "standing desk" --max-price 350 --user user_demo
+
+python -m earnest merchant check costco.com --item "Kirkland paper towels 12 rolls" --amount 24.99 --user user_demo
 python -m earnest merchant distrust sketchy-deals.shop --user user_demo --reason "never shipped"
-python -m earnest merchant trust ikea.fr --user user_demo        # fix a false positive
 python -m earnest merchant import-blocklist fraud-feed.txt --user user_demo   # one domain per line
-python -m earnest merchant list --user user_demo
 ```
 
-Rules and point values: [spec/SPEC.md](spec/SPEC.md) sections 3a and 3b.
+Card statements (`earnest import`, below) also count: a store on your card bill is a store you know. Rules and numbers: [spec/SPEC.md](spec/SPEC.md) sections 3a–3c.
 
 ## Spending insights
 

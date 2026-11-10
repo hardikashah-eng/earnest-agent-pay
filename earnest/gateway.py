@@ -7,7 +7,8 @@ from datetime import date, datetime, timezone
 from typing import Callable
 
 from .backends.mock import MockBackend
-from .history import PastPurchase, confidence, summarize
+from .confidence import score as confidence_score
+from .history import Interest, PastPurchase, item_tokens, summarize
 from .ledger import Ledger
 from .merchants import MerchantRegistry
 from .models import Decision, Mandate, Outcome, Profile, SpendRequest, ValidationError
@@ -68,33 +69,69 @@ class Gateway:
     def distrust_merchant(self, user_id: str, merchant: str, reason: str = "user") -> None:
         self.ledger.set_merchant_status(user_id, merchant, "untrusted", reason, self.clock())
 
+    # --- the user's purchase context: orders, interests, memberships ---
+    def import_orders(self, user_id: str, orders, source: str = "manual") -> tuple[int, int]:
+        return self.ledger.add_orders(user_id, orders, source)
+
+    def add_interest(self, user_id: str, item: str, merchant: str | None = None,
+                     max_price: float | None = None, source: str = "user") -> int:
+        return self.ledger.add_interest(user_id, item, merchant, max_price, source, self.clock())
+
+    def add_membership(self, user_id: str, merchant: str, program: str = "member") -> None:
+        self.ledger.add_membership(user_id, merchant, program, self.clock())
+
     def _past_purchases(self, user_id: str) -> list[PastPurchase]:
         past = []
         for p in self.ledger.purchases(user_id):
-            past.append(PastPurchase(frozenset(self.merchants.canonical(p["merchant"])), p["amount"],
+            past.append(PastPurchase(frozenset(self.merchants.canonical(p["merchant"])),
+                                     p["amount"] / max(1, p["quantity"]),
                                      datetime.fromisoformat(p["at"]).date(), "earnest", p["item"], p["verdict"]))
+        for o in self.ledger.orders(user_id):
+            past.append(PastPurchase(frozenset(self.merchants.canonical(o["merchant"])), o["unit_price"],
+                                     date.fromisoformat(o["date"]), "order", o["item"]))
         for t in self.ledger.statement_purchases(user_id):
             past.append(PastPurchase(frozenset(self.merchants.canonical(t["merchant"])), t["amount"],
                                      date.fromisoformat(t["date"]), "statement"))
         return past
 
-    def assess_merchant(self, user_id: str, merchant: str, item: str | None = None,
-                        amount: float = 0.0, category: str | None = None):
-        """(MerchantCheck, History, has_bought_here, confidence dict) for a prospective purchase."""
+    def _interests(self, user_id: str) -> list[Interest]:
+        return [Interest(i["item"], frozenset(self.merchants.canonical(i["merchant"])) if i["merchant"] else frozenset(),
+                         i["max_price"], i["source"]) for i in self.ledger.interests(user_id)]
+
+    def _memberships_at(self, user_id: str, keys: set[str]) -> list[str]:
+        return [m["program"] for m in self.ledger.memberships(user_id)
+                if keys & self.merchants.canonical(m["merchant"])]
+
+    def assess(self, user_id: str, merchant: str, *, item: str | None = None, amount: float = 0.0,
+               quantity: int = 1, category: str | None = None, mandate: Mandate | None = None):
+        """Everything known about a prospective purchase.
+        Returns (MerchantCheck, History, is_known_merchant, confidence dict)."""
         check = self.merchants.check(merchant, self.ledger.merchant_overrides(user_id))
         keys = self.merchants.canonical(merchant)
         past = self._past_purchases(user_id)
-        hist = summarize(keys, past, item, amount)
-        bought_here = any(keys & p.merchant_keys for p in past)
-        conf = confidence(check, hist)
+        hist = summarize(keys, past, item, self.clock().date(), self._interests(user_id),
+                         self._memberships_at(user_id, keys))
+        known = bool(hist.memberships) or any(keys & p.merchant_keys for p in past)
+        extra = []
         if category and self.merchants.high_risk_category(category):
-            conf["signals"].append(f"high_risk_category:{category}")
-        return check, hist, bought_here, conf
+            extra.append(f"high_risk_category:{category}")
+        intent_match = bool(item and mandate and item_tokens(item) & item_tokens(mandate.intent))
+        conf = confidence_score(
+            check, hist, amount=amount, quantity=quantity, item=item, intent_match=intent_match,
+            benchmark=mandate.benchmark_price if mandate else None,
+            budget_max=mandate.budget_max if mandate else None,
+            spent=self.ledger.spent_on_mandate(mandate.id) if mandate else 0.0,
+            budget_min=mandate.budget_min if mandate else None, extra_signals=extra)
+        return check, hist, known, conf
 
-    def check_merchant(self, user_id: str, merchant: str, item: str | None = None,
-                       amount: float = 0.0, category: str | None = None) -> dict:
-        """What an agent should know before buying: trust status, history, confidence."""
-        return self.assess_merchant(user_id, merchant, item, amount, category)[3]
+    def check_merchant(self, user_id: str, merchant: str, item: str | None = None, amount: float = 0.0,
+                       category: str | None = None, mandate_id: str | None = None, quantity: int = 1) -> dict:
+        """What an agent should know before buying: trust, history, and the confidence score."""
+        mandate = self.ledger.get_mandate(mandate_id) if mandate_id else None
+        if mandate is not None and mandate.user_id != user_id:
+            mandate = None
+        return self.assess(user_id, merchant, item=item, amount=amount, quantity=quantity,
+                           category=category, mandate=mandate)[3]
 
     # --- agent side ---
     def request_spend(self, request: SpendRequest | dict) -> Decision:
@@ -111,8 +148,9 @@ class Gateway:
 
         profile = self.profile(mandate.user_id)
         score, t = self.tier(mandate.user_id, req.agent_id, mandate.task_type)
-        check, hist, bought_here, conf = self.assess_merchant(
-            mandate.user_id, req.merchant, req.item, req.amount, req.category)
+        check, hist, bought_here, conf = self.assess(
+            mandate.user_id, req.merchant, item=req.item, amount=req.amount, quantity=req.quantity,
+            category=req.category, mandate=mandate)
         verdict = decide(
             req, mandate, profile, t,
             spent=self.ledger.spent_on_mandate(mandate.id),
@@ -120,6 +158,7 @@ class Gateway:
             now=now,
             merchant=check, history=hist,
             high_risk_category=self.merchants.high_risk_category(req.category),
+            confidence=conf,
         )
         decision = Decision(request_id, verdict.status, verdict.reasons, t.name, confidence=conf)
         if verdict.status == "approved":

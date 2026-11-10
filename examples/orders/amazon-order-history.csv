@@ -1,0 +1,6 @@
+Website,Order ID,Order Date,Currency,Unit Price,Unit Price Tax,Shipping Charge,Total Owed,Quantity,ASIN,Order Status,Product Name
+Amazon.com,111-0000001-0000001,2026-03-04T17:22:10Z,USD,15.99,1.32,0,17.31,1,B000TEST01,Closed,"Amazon Basics AA Batteries, 24 Pack"
+Amazon.com,111-0000002-0000002,2026-06-18T02:11:45Z,USD,16.49,1.36,0,17.85,1,B000TEST01,Closed,"Amazon Basics AA Batteries, 24 Pack"
+Amazon.com,111-0000003-0000003,2026-07-02T21:03:00Z,USD,12.99,1.07,0,14.06,2,B000TEST02,Closed,"Anker USB-C to USB-C Cable 6ft"
+Amazon.com,111-0000004-0000004,2026-08-15T15:40:19Z,USD,329.00,27.14,0,356.14,1,B000TEST03,Cancelled,"Electric Standing Desk 48 inch"
+Amazon.com,111-0000005-0000005,2026-09-09T12:00:00Z,USD,24.99,2.06,0,27.05,1,B000TEST04,Closed,"Brita Water Filter Replacement 6 Pack"

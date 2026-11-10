@@ -46,7 +46,7 @@ Checks run in this order. The first group **denies** the request and counts as a
 6. Tier is `restricted`.
 7. Mandate `approval` is `always` or `shortlist`.
 8. `amount` > tier cap.
-9. `amount` > effective approval threshold.
+9. `amount` > effective approval threshold, unless it's a routine repeat purchase (section 3c).
 10. The merchant is **suspicious** (section 3a): a verified brand on a domain we don't list, a frequently abused TLD, or a phishing-style word in the domain.
 11. The category is a **high-risk payment rail** (gift cards, crypto, wire or money transfers, prepaid cards, money orders): hard to reverse, and what scammers ask for.
 12. The user **rejected or disputed** the same or a similar item from this merchant before (section 3b).
@@ -54,9 +54,11 @@ Checks run in this order. The first group **denies** the request and counts as a
 
 **Approve** otherwise: the backend issues a credential capped at `amount`, locked to the merchant, expiring after the tier's lifetime. It's single-use if the tier says so or if profile `privacy` ≥ 0.8.
 
+9b. Purchase confidence is below the profile's `min_confidence` (section 3c).
+
 Unknown mandates are denied without touching any score.
 
-Every decision carries a `confidence` block (low / medium / high, plus the merchant status, history counts and signals) so the agent and the user can see why. It's informational: `status` and `reasons` are the decision.
+Every decision carries a `confidence` block (score, level, the four factors with reasons, merchant status, history and signals) so the agent and the user can see why.
 
 ### 3a. Merchant trust
 
@@ -73,32 +75,38 @@ Each merchant is classified before any history is considered. Merchants are matc
 
 The user's lists always win over the defaults, so a false positive is fixed with `earnest merchant trust <merchant>`. The default blocklist ships with pattern rules and no named third parties, since scam domains change daily; load a current feed with `earnest merchant import-blocklist <file>`.
 
-### 3b. Purchase history
+### 3b. Purchase history, memberships and interests
 
-If the request names an `item`, the gateway compares it with what the user bought before at the same merchant:
-- **earnest purchases**: merchant, item, amount and the user's verdict.
-- **imported card statements** (see [Spending insights](../README.md#spending-insights)): merchant and amount only.
+The gateway gathers what the user has bought and wants, from:
 
-Items are compared by word overlap (plurals folded): ≥ 0.8 is the *same item*, ≥ 0.4 a *similar item*. Confidence starts from the merchant status (verified 0.6, user-trusted 0.7, unknown 0.3, suspicious 0.1, untrusted 0) and then:
+| Source | Has item? | Import |
+|---|---|---|
+| earnest purchases (with the user's verdict) | yes, if the agent sent `item` | automatic |
+| Retailer order history: Amazon, Costco, Walmart, Target, … | yes, with unit price | `earnest orders import` (Amazon "Request your data" export, or a generic date/item/price CSV with `--retailer`), or an `OrderSource` connector |
+| Card statements | no (merchant and amount) | `earnest import` / `earnest sync` |
+| Memberships (Prime, Costco, Walmart+, Target Circle, a local co-op) | — | `earnest membership add` |
+| Interests (wishlist, cart, "I want a standing desk under $350") | yes, optional max price and merchant | `earnest interest add` / `earnest interest import` |
 
-| Signal | Effect |
-|---|---|
-| Bought from this merchant before | +0.15 (+0.05 more at 3+ purchases) |
-| Same item bought and kept here before | +0.2 (similar item: +0.1) |
-| Same or similar item here was rejected or disputed | −0.3, and the request escalates (check 12) |
-| Price more than 1.5× what the user paid for that item before | −0.1 |
+Items are compared by word overlap with plurals folded; a specific description (3+ words) whose words all appear in a longer retail title also counts (`AA batteries 24 pack` = `Amazon Basics AA Batteries, 24 Pack`). ≥ 0.8 is the *same item*, ≥ 0.4 a *similar item*. Cancelled, returned and refunded order lines are ignored. Only prices from the last 365 days (latest 5) are used as a price reference.
 
-Level: high ≥ 0.75, medium ≥ 0.45, low otherwise. Untrusted merchants are always 0. Agents can call `check_merchant` before requesting to see the same block.
+A merchant counts as **known** (check 13 and the `no_new_merchants` rule) if it appears in any purchase source or the user is a member there. A same or similar item at this merchant that the user **rejected or disputed** escalates (check 12).
 
-### Asking first
+### 3c. Purchase confidence
 
-If the agent sets `ask_first`, the request is escalated instead of denied or approved. The reward depends on whether asking was needed:
-- The request would have been denied or escalated anyway → escalate, **+1** (the agent asked before acting).
-- The request would have been auto-approved → escalate, **0** (unnecessary interruptions earn nothing).
+Every request gets a 0–1 confidence from four weighted factors, each 0–1 with a plain-language reason:
 
-This rewards good judgment without making `ask_first` a way to farm points.
+| Factor | Weight | Scoring |
+|---|---|---|
+| **Authenticity** | 0.35 | verified / user-trusted 0.9, and 1.0 if the user is a member; unknown merchant 0.4, 0.7 if the user has bought there, 0.9 if a member; suspicious 0.15; untrusted 0 |
+| **Price** | 0.25 | Same item in the last year: 1.0 up to 10% over the highest recent unit price, then falling (floor 0.1). Otherwise similar items (up to 0.85, 25% tolerance), the interest's max price (0.9 / 0.3), the mandate's `benchmark_price` (up to 0.8), or 0.5 with no reference |
+| **Familiarity** | 0.25 | same item bought here 1.0; similar item here or same item elsewhere 0.75; shown interest 0.8; item matches the mandate intent 0.55; shops here but new item 0.5; nothing 0.3; rejected here before 0 |
+| **Budget** | 0.15 | Share of the mandate's remaining budget: ≤ 50% → 1.0, 100% → 0.6; inside a gift's `[min, max]` range → 1.0; over → 0 (and denied by check 4) |
 
-When the user approves an escalated request, a credential is issued exactly as in an approval. When they deny it, nothing is scored.
+`score = Σ weight × factor`, forced to 0 for untrusted merchants. Level: high ≥ 0.75, medium ≥ 0.5, low below. The gateway uses it on every request:
+- **Low confidence**: below the profile's `min_confidence` (default 0.35) → escalate, reason `low_confidence:<score>`.
+- **Routine repeat purchase**: the same item bought here before, price in range, authenticity ≥ 0.7, not suspicious and score ≥ 0.8 → the approval-threshold escalation (check 9) is skipped. The **tier cap still applies**, as do every deny check and every other escalation.
+
+Agents call `check_merchant` (optionally with `mandate_id` and `quantity`) to see the same score before requesting, and can compare merchants and prices with it.
 
 ## 4. Scoring
 

@@ -31,6 +31,10 @@
       "items": { "type": "string", "enum": ["no_subscriptions", "no_new_merchants", "no_international"] },
       "default": [],
       "description": "Rules that always apply, regardless of trust tier."
+    },
+    "min_confidence": {
+      "type": "number", "minimum": 0, "maximum": 1, "default": 0.35,
+      "description": "Purchases scoring below this confidence (SPEC.md section 3c) are escalated to the user."
     }
   },
   "additionalProperties": false

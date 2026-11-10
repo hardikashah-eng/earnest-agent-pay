@@ -32,6 +32,19 @@ CREATE TABLE IF NOT EXISTS merchant_lists (
     user_id TEXT NOT NULL, key TEXT NOT NULL, merchant TEXT NOT NULL, status TEXT NOT NULL,
     reason TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (user_id, key)
 );
+CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, merchant TEXT NOT NULL, item TEXT NOT NULL,
+    unit_price REAL NOT NULL, quantity INTEGER NOT NULL, date TEXT NOT NULL, source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS orders_user ON orders (user_id, date);
+CREATE TABLE IF NOT EXISTS interests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, item TEXT NOT NULL,
+    merchant TEXT, max_price REAL, source TEXT NOT NULL, at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memberships (
+    user_id TEXT NOT NULL, merchant TEXT NOT NULL, program TEXT NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY (user_id, merchant)
+);
 """
 
 
@@ -113,8 +126,9 @@ class Ledger:
             "WHERE r.user_id = ? AND r.status = 'approved' ORDER BY r.created_at", (user_id,))
         out = []
         for r in rows:
+            data = json.loads(r["data"])
             out.append({"merchant": r["merchant"], "amount": r["amount"], "at": r["created_at"],
-                        "item": json.loads(r["data"]).get("item"),
+                        "item": data.get("item"), "quantity": data.get("quantity", 1),
                         "verdict": json.loads(r["outcome"])["verdict"] if r["outcome"] else None})
         return out
 
@@ -126,6 +140,54 @@ class Ledger:
             return []
         return [dict(r) for r in self.db.execute(
             "SELECT merchant, amount, date FROM transactions WHERE user_id = ? ORDER BY date", (user_id,))]
+
+    # --- retailer order history, interests, memberships ---
+    def add_orders(self, user_id: str, orders, source: str) -> tuple[int, int]:
+        """Insert orders (earnest.insights.orders.Order), skipping ones already stored."""
+        added = 0
+        with self.db:
+            for o in orders:
+                added += self.db.execute(
+                    "INSERT OR IGNORE INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (o.id, user_id, o.merchant, o.item, o.unit_price, o.quantity, o.date.isoformat(),
+                     source)).rowcount
+        return added, len(orders) - added
+
+    def orders(self, user_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT merchant, item, unit_price, quantity, date, source FROM orders "
+            "WHERE user_id = ? ORDER BY date", (user_id,))]
+
+    def add_interest(self, user_id: str, item: str, merchant: str | None, max_price: float | None,
+                     source: str, at: datetime) -> int:
+        with self.db:
+            return self.db.execute(
+                "INSERT INTO interests (user_id, item, merchant, max_price, source, at) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, item, merchant, max_price, source, at.isoformat())).lastrowid
+
+    def interests(self, user_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT id, item, merchant, max_price, source, at FROM interests WHERE user_id = ? ORDER BY id",
+            (user_id,))]
+
+    def remove_interest(self, user_id: str, interest_id: int) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM interests WHERE user_id = ? AND id = ?",
+                                   (user_id, interest_id)).rowcount > 0
+
+    def add_membership(self, user_id: str, merchant: str, program: str, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO memberships VALUES (?, ?, ?, ?)",
+                            (user_id, merchant, program, at.isoformat()))
+
+    def remove_membership(self, user_id: str, merchant: str) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM memberships WHERE user_id = ? AND merchant = ?",
+                                   (user_id, merchant)).rowcount > 0
+
+    def memberships(self, user_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT merchant, program, at FROM memberships WHERE user_id = ? ORDER BY merchant", (user_id,))]
 
     # --- the user's merchant lists ---
     def set_merchant_status(self, user_id: str, merchant: str, status: str, reason: str, at: datetime) -> None:
