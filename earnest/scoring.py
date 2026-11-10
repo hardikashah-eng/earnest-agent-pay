@@ -8,6 +8,7 @@ from .models import Mandate, Outcome, Profile
 PURCHASE_APPROVED = 2.0
 ASKED_FIRST = 1.0
 VIOLATION = -10.0
+ITEM_VERIFIED = 1.0   # the order/cart matched what the agent said it would buy
 VERDICT_POINTS = {"accepted": 3.0, "rejected": -5.0, "disputed": -15.0}
 HALF_LIFE_DAYS = 90.0
 

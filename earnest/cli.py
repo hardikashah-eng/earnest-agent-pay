@@ -109,7 +109,8 @@ def _context_cmd(args, gw: Gateway) -> int:
             text = Path(args.file).read_text(encoding="utf-8-sig")
             orders = parse_orders_csv(text, args.user, args.retailer)
             added, dupes = gw.import_orders(args.user, orders, f"file:{Path(args.file).name}")
-            _print({"file": Path(args.file).name, "added": added, "duplicates": dupes})
+            _print({"file": Path(args.file).name, "added": added, "duplicates": dupes,
+                    "reconciled": gw.reconcile(args.user)})
         else:
             rows = gw.ledger.orders(args.user)
             _print(rows[-args.last:] if args.last else rows)
@@ -190,6 +191,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("merchant", nargs="?")
     p.add_argument("--user", required=True)
     p.add_argument("--program", default="member", help="e.g. prime, executive, walmart+, circle")
+    p = sub.add_parser("reconcile", help="check approved purchases against your order history")
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("charge", help="simulate a merchant charging a credential (mock backend)")
+    p.add_argument("credential_id")
+    p.add_argument("amount", type=float)
+    p.add_argument("merchant")
+    p.add_argument("--items", help="JSON file with cart line items [{item, amount, quantity}]")
     p = sub.add_parser("demo", help="run the two-agent simulation and write a chart")
     p.add_argument("--out", default="demo/limits.svg")
     p.add_argument("--days", type=int, default=40)
@@ -253,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "reconcile":
+            _print(gw.reconcile(args.user))
+        elif args.cmd == "charge":
+            items = _load(args.items) if args.items else None
+            _print(gw.authorize_charge(args.credential_id, args.amount, args.merchant, items))
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
         elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):

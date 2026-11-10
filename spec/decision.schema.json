@@ -21,7 +21,8 @@
         "merchant_lock": { "type": "string" },
         "expires_at": { "type": "string", "format": "date-time" },
         "single_use": { "type": "boolean" },
-        "backend": { "type": "string" }
+        "backend": { "type": "string" },
+        "item_lock": { "type": "string", "description": "The item the agent claimed. When the merchant sends cart line items, the card only pays for this item (SPEC.md 3d)." }
       }
     },
     "confidence": {

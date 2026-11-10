@@ -265,13 +265,17 @@ class Credential:
     expires_at: datetime
     single_use: bool
     backend: str
+    item_lock: str | None = None  # the item the agent claimed; checked against cart line items
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "id": self.id, "cap": self.cap, "currency": self.currency,
             "merchant_lock": self.merchant_lock, "expires_at": self.expires_at.isoformat(),
             "single_use": self.single_use, "backend": self.backend,
         }
+        if self.item_lock:
+            out["item_lock"] = self.item_lock
+        return out
 
 
 @dataclass

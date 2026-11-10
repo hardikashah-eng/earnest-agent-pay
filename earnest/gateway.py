@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 from .backends.mock import MockBackend
@@ -13,7 +13,8 @@ from .ledger import Ledger
 from .merchants import MerchantRegistry
 from .models import Decision, Mandate, Outcome, Profile, SpendRequest, ValidationError
 from .rules import decide
-from .scoring import ASKED_FIRST, PURCHASE_APPROVED, VIOLATION, outcome_events
+from .scoring import ASKED_FIRST, ITEM_VERIFIED, PURCHASE_APPROVED, VIOLATION, outcome_events
+from .verify import MISMATCH_SUSPENDS_DAYS, LineItem, OrderLine, reconcile
 from .tiers import DEFAULT_TIERS, Tier, tier_for
 
 
@@ -83,9 +84,11 @@ class Gateway:
     def _past_purchases(self, user_id: str) -> list[PastPurchase]:
         past = []
         for p in self.ledger.purchases(user_id):
+            # an item claim that didn't match the real order says nothing about the item
+            item = None if p["verification"] == "mismatch" else p["item"]
             past.append(PastPurchase(frozenset(self.merchants.canonical(p["merchant"])),
                                      p["amount"] / max(1, p["quantity"]),
-                                     datetime.fromisoformat(p["at"]).date(), "earnest", p["item"], p["verdict"]))
+                                     datetime.fromisoformat(p["at"]).date(), "earnest", item, p["verdict"]))
         for o in self.ledger.orders(user_id):
             past.append(PastPurchase(frozenset(self.merchants.canonical(o["merchant"])), o["unit_price"],
                                      date.fromisoformat(o["date"]), "order", o["item"]))
@@ -151,6 +154,8 @@ class Gateway:
         check, hist, bought_here, conf = self.assess(
             mandate.user_id, req.merchant, item=req.item, amount=req.amount, quantity=req.quantity,
             category=req.category, mandate=mandate)
+        if self._routine_suspended(mandate.user_id, req.agent_id, mandate.task_type, now):
+            conf["signals"].append("routine_suspended")
         verdict = decide(
             req, mandate, profile, t,
             spent=self.ledger.spent_on_mandate(mandate.id),
@@ -162,7 +167,7 @@ class Gateway:
         )
         decision = Decision(request_id, verdict.status, verdict.reasons, t.name, confidence=conf)
         if verdict.status == "approved":
-            decision.credential = self._issue(req, mandate, profile, t, now)
+            decision.credential = self._issue(req, mandate, profile, t, now, request_id)
 
         self.ledger.add_request(request_id, mandate.user_id, mandate.task_type, req,
                                 decision.status, decision.to_dict(), now)
@@ -207,7 +212,7 @@ class Gateway:
 
         profile = self.profile(mandate.user_id)
         decision = Decision(request_id, "approved", [*prior, "user_approved"], t.name,
-                            self._issue(req, mandate, profile, t, now),
+                            self._issue(req, mandate, profile, t, now, request_id),
                             json.loads(row["decision"]).get("confidence"))
         self.ledger.update_request(request_id, "approved", decision.to_dict())
         self.ledger.add_points(mandate.user_id, req.agent_id, mandate.task_type,
@@ -235,7 +240,62 @@ class Gateway:
         return events
 
     # --- internals ---
-    def _issue(self, req: SpendRequest, mandate: Mandate, profile: Profile, t: Tier, now: datetime):
-        return self.backend.issue(
+    def _issue(self, req: SpendRequest, mandate: Mandate, profile: Profile, t: Tier, now: datetime,
+               request_id: str):
+        cred = self.backend.issue(
             cap=req.amount, currency=mandate.currency, merchant=req.merchant,
-            lifetime_hours=t.lifetime_hours, single_use=t.single_use or profile.privacy >= 0.8, now=now)
+            lifetime_hours=t.lifetime_hours, single_use=t.single_use or profile.privacy >= 0.8, now=now,
+            item=req.item)
+        self.ledger.link_credential(cred.id, request_id)
+        return cred
+
+    def _routine_suspended(self, user_id: str, agent_id: str, task_type: str, now: datetime) -> bool:
+        last = self.ledger.last_event(user_id, agent_id, task_type, "item_mismatch")
+        return last is not None and now - last < timedelta(days=MISMATCH_SUSPENDS_DAYS)
+
+    # --- item verification (spec section 3d) ---
+    def _record_verification(self, request_id: str, status: str, detail: str) -> dict:
+        row = self.ledger.get_request(request_id)
+        now = self.clock()
+        self.ledger.set_verification(request_id, status, detail, now)
+        key = (row["user_id"], row["agent_id"], row["task_type"])
+        if status == "mismatch":
+            self.ledger.add_points(*key, "item_mismatch", VIOLATION, request_id, now)
+        elif status == "verified":
+            self.ledger.add_points(*key, "item_verified", ITEM_VERIFIED, request_id, now)
+        return {"request_id": request_id, "status": status, "detail": detail}
+
+    def authorize_charge(self, credential_id: str, amount: float, merchant: str,
+                         line_items: list[dict] | None = None) -> dict:
+        """A merchant charges an issued credential, optionally with cart line items.
+        (With a real backend this arrives as an authorization webhook.)"""
+        items = [LineItem.from_dict(li) for li in line_items] if line_items is not None else None
+        ok, reason = self.backend.authorize(credential_id, amount, merchant, self.clock(), items)
+        out = {"approved": ok, "reason": reason}
+        request_id = self.ledger.request_for_credential(credential_id)
+        if request_id and items is not None and reason.startswith("item_mismatch"):
+            out["verification"] = self._record_verification(request_id, "mismatch", reason)
+        elif request_id and ok and reason == "approved" and items is not None:
+            cred = getattr(self.backend, "cards", {}).get(credential_id)
+            if cred is not None and cred.item_lock:
+                out["verification"] = self._record_verification(request_id, "verified", "cart matched")
+        return out
+
+    def reconcile(self, user_id: str) -> list[dict]:
+        """Match approved purchases that named an item against the user's order history."""
+        today = self.clock().date()
+        orders = [(frozenset(self.merchants.canonical(o["merchant"])),
+                   OrderLine(o["item"], o["unit_price"] * o["quantity"], date.fromisoformat(o["date"])))
+                  for o in self.ledger.orders(user_id)]
+        results = []
+        for p in self.ledger.purchases(user_id):
+            if not p["item"] or p["verification"] not in (None, "pending"):
+                continue
+            keys = self.merchants.canonical(p["merchant"])
+            here = [line for k, line in orders if keys & k]
+            status, detail = reconcile(p["item"], p["amount"], datetime.fromisoformat(p["at"]).date(),
+                                       here, today)
+            if status == "pending" and p["verification"] == "pending":
+                continue
+            results.append(self._record_verification(p["request_id"], status, detail))
+        return results
