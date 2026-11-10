@@ -39,6 +39,8 @@ class Gateway:
         self.tiers = tiers
         self.merchants = merchants or MerchantRegistry.default()
         self.notifier = notifier
+        # approval-link targets other than spend requests, by id prefix: prefix -> (resolve, describe)
+        self.token_handlers: dict[str, tuple] = {}
         self.approval_url = (approval_url or "http://localhost:8787").rstrip("/")
 
     # --- setup (user side) ---
@@ -587,10 +589,23 @@ class Gateway:
     def read_approval_token(self, token: str) -> tuple[str, str]:
         return read_token(self.ledger.secret("approvals"), token, self.clock().timestamp())
 
-    def resolve_token(self, token: str) -> Decision:
+    def resolve_token(self, token: str):
         request_id, action, approver = read_token(self.ledger.secret("approvals"), token,
                                                   self.clock().timestamp(), with_approver=True)
+        for prefix, (resolve, _) in self.token_handlers.items():
+            if request_id.startswith(prefix):
+                return resolve(request_id, action == "approve", approver)
         return self.resolve(request_id, approve=action == "approve", approver=approver)
+
+    def describe_pending(self, request_id: str) -> dict | None:
+        """What an approval link is about, or None if it's no longer waiting."""
+        for prefix, (_, describe) in self.token_handlers.items():
+            if request_id.startswith(prefix):
+                return describe(request_id)
+        row = self.ledger.get_request(request_id)
+        if row is None:
+            return None
+        return next((p for p in self.pending(row["user_id"]) if p["request_id"] == request_id), None)
 
     # --- AP2 interop ---
     def _approved(self, request_id: str) -> tuple[dict, dict, dict]:

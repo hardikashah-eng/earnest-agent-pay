@@ -181,3 +181,17 @@ Design notes:
 ## 5. Out of scope for v0.1
 
 Real money, live card issuing, cross-user reputation, LLM-generated mandates, learning the profile from behavior. See [docs/SCOPE.md](../docs/SCOPE.md).
+
+## 6. Selling
+
+**Valuation.** The agent identifies the item from the user's photo (title, condition, category, ISBN/UPC). Earnest prices it from comparables: sold listings (eBay Marketplace Insights, limited-release access), active listings (eBay Browse, discounted 15% because asks aren't sales), instant buyback quotes, and stored price quotes. Comps are adjusted to the item's condition (new 1.25, like new 1.1, good 1.0, fair 0.8, poor 0.6). Likely price = weighted median (sold ×1, active ×0.5); quick-sale = 25th percentile, raised to the best buyback quote; high = 75th. Payout per platform subtracts fees ([earnest/data/selling.json](../earnest/data/selling.json), conservative, checked 2026-11) and estimated seller-paid shipping; Facebook Marketplace is local pickup (no fee, no shipping) for bulky or cheap items.
+
+**Sell mandate** (per item): `floor` (lowest acceptable), optional `target` (asking), `auto`, allowed `platforms`, expiry (30 days default).
+- Only the user sets a floor; one proposed by an agent is `pending` until the user taps Approve.
+- Listing below the floor, or accepting an offer or buyback quote below it, is denied and costs the agent −10 (task type `selling`).
+- With `auto`, offers and quotes at or above the floor are accepted; without it they go to the user.
+- eBay listings carry the floor as Best Offer `autoAcceptPrice` (and `autoDeclinePrice` at 80% of it), so eBay enforces it even when no agent is running.
+- When an item sells anywhere, every other listing is ended (or flagged for manual removal).
+- A sale at or above the floor earns the listing agent +2.
+
+**One click.** `quick_sell` (CLI `earnest sell quick`, MCP `appraise_item` → `propose_sale` → tap → `sell_now`): value it; if a buyback quote meets the floor, sell; otherwise list at max(target, likely price, 1.2 × floor) on the best connected one-click platform and prepare copy-paste kits for the best manual platforms (Mercari, Poshmark, Facebook Marketplace), with sign-up links for useful platforms the user hasn't linked.

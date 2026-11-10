@@ -139,6 +139,59 @@ def _context_cmd(args, gw: Gateway) -> int:
     return 0
 
 
+def sell_desk_from_env(gw: Gateway):
+    """eBay is connected when EBAY_TOKEN (a user OAuth token) and the EBAY_* policy ids are set."""
+    from .selling import EbayComps, EbayConfig, EbayInventoryAdapter, SellDesk, ebay_transport
+    platforms, comps = {}, []
+    if os.environ.get("EBAY_TOKEN"):
+        t = ebay_transport(os.environ["EBAY_TOKEN"])
+        comps.append(EbayComps(t, sold_access=os.environ.get("EBAY_SOLD_ACCESS") == "1"))
+        if os.environ.get("EBAY_PAYMENT_POLICY_ID"):
+            platforms["ebay"] = EbayInventoryAdapter(t, EbayConfig.from_env())
+    return SellDesk(gw, platforms, [], comps)
+
+
+def _sell_cmd(args, gw: Gateway, ap) -> int:
+    desk = sell_desk_from_env(gw)
+    a = args.action
+    need_item = {"value", "floor", "go", "list", "offer", "sold", "kit"}
+    if a in need_item and not args.item:
+        ap.error(f"sell {a} needs an item id")
+    if a == "quick":
+        if not (args.title and args.floor):
+            ap.error("sell quick needs --title and --floor (the lowest price you'll take)")
+        _print(desk.quick_sell(args.user, args.title, args.floor, args.target, args.condition, args.category,
+                               args.photo, args.product_id, args.description or "", not args.ask_each_offer))
+    elif a == "new":
+        _print(desk.new_item(args.user, args.title or "", args.condition, args.category, args.description or "",
+                             args.product_id, args.photo).to_dict())
+    elif a == "value":
+        _print(desk.appraise(args.item))
+    elif a == "floor":
+        _print(desk.set_floor(args.item, args.floor, args.target, not args.ask_each_offer,
+                              args.platforms.split(",") if args.platforms else None, args.days).to_dict())
+    elif a == "go":
+        _print(desk.go(args.item))
+    elif a in ("list", "kit"):
+        if not (args.platform and args.price):
+            ap.error(f"sell {a} needs --platform and --price")
+        _print(desk.list_item(args.item, args.platform, args.price))
+    elif a == "offer":
+        _print(desk.handle_offer(args.item, args.platform, args.amount, args.offer_id))
+    elif a == "sold":
+        _print(desk.record_sale(args.item, args.platform, args.amount, args.order))
+    elif a == "items":
+        _print(desk.items(args.user))
+    elif a == "sales":
+        _print(desk.sales(args.user))
+    elif a == "link":
+        desk.link_platform(args.user, args.platform)
+        print(f"linked {args.platform}")
+    elif a == "sync":
+        _print(desk.sync())
+    return 0
+
+
 def _backend_from_env():
     if os.environ.get("EARNEST_BACKEND", "mock") == "stripe":
         from .backends import StripeIssuingBackend
@@ -261,6 +314,27 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--epsilon", type=float, default=1.0, help="privacy budget per count (lower = noisier)")
     p.add_argument("--out", help="aggregate: feed output file")
     p.add_argument("--k", type=int, default=5, help="aggregate: minimum contributors per merchant")
+    p = sub.add_parser("sell", help="sell things: photo + price range -> listed or sold")
+    p.add_argument("action", choices=["quick", "new", "value", "floor", "go", "list", "kit", "offer", "sold",
+                                      "items", "sales", "link", "sync"])
+    p.add_argument("item", nargs="?", help="item id (sell_...)")
+    p.add_argument("--user", default="user_demo")
+    p.add_argument("--title", help="what it is, e.g. 'The Hobbit, 1st Ballantine paperback'")
+    p.add_argument("--photo", action="append", default=[], help="photo path or https URL (repeatable)")
+    p.add_argument("--condition", default="good", choices=["new", "like_new", "good", "fair", "poor"])
+    p.add_argument("--category", help="books, electronics, apparel, shoes, toys, home, ...")
+    p.add_argument("--product-id", help="ISBN / UPC / ASIN if visible")
+    p.add_argument("--description")
+    p.add_argument("--floor", type=float, help="lowest price you'll accept")
+    p.add_argument("--target", type=float, help="asking price (optional)")
+    p.add_argument("--ask-each-offer", action="store_true", help="don't let the agent accept offers on its own")
+    p.add_argument("--platforms", help="comma-separated platforms the agent may use")
+    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--platform")
+    p.add_argument("--price", type=float)
+    p.add_argument("--amount", type=float)
+    p.add_argument("--offer-id")
+    p.add_argument("--order")
     p = sub.add_parser("serve", help="serve approval links (and the Stripe webhook) over HTTP")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8787)
@@ -333,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "sell":
+            return _sell_cmd(args, gw, ap)
         elif args.cmd == "trust":
             if args.action == "export":
                 if not (args.user and args.agent and args.task):

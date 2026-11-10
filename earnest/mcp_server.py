@@ -85,6 +85,88 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
         return {"status": "invalid", "error": str(e)}
 
 
+_desk = None
+
+
+def _sell():
+    global _desk
+    if _desk is None:
+        from .cli import sell_desk_from_env
+        _desk = sell_desk_from_env(_gateway)
+    return _desk
+
+
+def _own_item(item_id: str) -> bool:
+    try:
+        return _sell().item(item_id).user_id == USER_ID
+    except ValidationError:
+        return False
+
+
+@mcp.tool()
+def appraise_item(title: str, condition: str = "good", category: str = "", product_id: str = "",
+                  description: str = "", photo_paths: list[str] | None = None) -> dict:
+    """Start selling something the user showed you. Look at the photo yourself and fill in what it
+    is (title), its condition (new, like_new, good, fair, poor), category (books, electronics,
+    apparel, shoes, toys, home, ...) and any ISBN / UPC you can read. Returns an item id, the
+    likely price, a quick-sale price, and where it would pay the most after fees and shipping."""
+    try:
+        it = _sell().new_item(USER_ID, title, condition, category or None, description, product_id or None,
+                              photo_paths or [])
+        return _sell().appraise(it.id)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def propose_sale(item_id: str, floor: float, target: float = 0.0, auto: bool = True,
+                 platforms: list[str] | None = None) -> dict:
+    """Propose the user's price range for an item: floor = the lowest price THE USER said they'd
+    take (never invent one), target = asking price. The user gets a one-tap approval; nothing is
+    listed until they approve. After approval, call sell_now."""
+    if not _own_item(item_id):
+        return {"status": "invalid", "error": "unknown item"}
+    try:
+        m = _sell().set_floor(item_id, floor, target or None, auto, platforms, by=f"agent:{AGENT_ID}")
+        return {"status": m.status, "instruction": m.to_dict(),
+                "next": "ask the user to tap Approve in the message earnest sent them"}
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def sell_now(item_id: str) -> dict:
+    """Once the user approved the price range: take an instant buyback at or above the floor if
+    there is one, otherwise list on the best connected platform (eBay auto-accepts offers at the
+    floor) and prepare copy-paste listings for others. Selling below the floor is a violation."""
+    if not _own_item(item_id):
+        return {"status": "invalid", "error": "unknown item"}
+    try:
+        return _sell().go(item_id, AGENT_ID)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def respond_to_offer(item_id: str, platform: str, amount: float, offer_id: str = "") -> dict:
+    """A buyer offered `amount`. Accepts it when it's at or above the user's floor and the user
+    allowed auto-selling; declines below the floor; otherwise tells you to ask the user."""
+    if not _own_item(item_id):
+        return {"status": "invalid", "error": "unknown item"}
+    try:
+        if offer_id:
+            return _sell().accept_offer(item_id, platform, amount, offer_id, AGENT_ID)
+        return _sell().handle_offer(item_id, platform, amount, None, AGENT_ID)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def list_items_for_sale() -> list[dict]:
+    """The user's items for sale, their price floors and where they're listed."""
+    return _sell().items(USER_ID)
+
+
 @mcp.tool()
 def get_reorder_suggestions(within_days: int = 14) -> list[dict]:
     """Items the user buys regularly that are due soon (item, usual store, typical price,

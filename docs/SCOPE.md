@@ -70,6 +70,11 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 - Opt-in shared merchant reputation with local differential privacy and k-anonymous feeds.
 - Next: bind records to an agent identity key (challenge-response, or an agent-identity protocol such as Visa TAP), and a hosted aggregator.
 
+## Selling (v0.4)
+
+- Done: photo-to-value (agent identifies, earnest prices from comps and buyback quotes), sell mandates with floors and one-tap approval, eBay listings with Best Offer auto-accept at the floor, buyback interface, copy-paste kits for platforms without APIs, cross-listing protection.
+- Next: shipping (packaging, cheapest service, labels) and sale follow-through; real buyback vendor connectors; image hosting for eBay photos.
+
 ## Next (v0.2+)
 
 - Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.

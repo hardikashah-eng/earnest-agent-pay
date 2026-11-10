@@ -1,0 +1,25 @@
+{
+  "checked": "2026-11",
+  "_comment": "Seller fees and defaults used to estimate payouts. Sources disagree on some current fees, so these are the conservative (higher-fee) end; fees vary by category and change. Payout estimates are guidance, not quotes.",
+  "platforms": {
+    "ebay":     { "name": "eBay", "api": true, "fee_pct": 13.25, "fee_fixed": 0.40, "fee_fixed_under_10": 0.30,
+                  "category_fee_pct": { "books": 15.3, "media": 15.3 }, "seller_ships": true,
+                  "good_for": ["*"], "signup": "https://www.ebay.com/sl/sell" },
+    "mercari":  { "name": "Mercari", "api": false, "fee_pct": 10.0, "fee_fixed": 0, "seller_ships": true,
+                  "good_for": ["*"], "signup": "https://www.mercari.com/sell/" },
+    "poshmark": { "name": "Poshmark", "api": false, "fee_pct": 20.0, "fee_fixed": 0, "flat_under_15": 2.95,
+                  "seller_ships": false, "good_for": ["apparel", "shoes", "accessories", "beauty", "home"],
+                  "signup": "https://poshmark.com/sell" },
+    "facebook": { "name": "Facebook Marketplace", "api": false, "fee_pct": 10.0, "fee_min": 0.80, "local_fee_pct": 0,
+                  "seller_ships": true, "local_pickup": true, "good_for": ["*"],
+                  "signup": "https://www.facebook.com/marketplace/create" }
+  },
+  "condition_multiplier": { "new": 1.25, "like_new": 1.1, "good": 1.0, "fair": 0.8, "poor": 0.6 },
+  "active_listing_discount": 0.85,
+  "shipping_estimate": {
+    "_comment": "Rough seller-paid shipping by category until PR 2's shipping module / a label API gives real rates.",
+    "books": 4.5, "media": 4.5, "apparel": 6.5, "shoes": 11.0, "accessories": 5.5, "beauty": 5.5,
+    "electronics": 10.0, "toys": 9.0, "home": 12.0, "default": 9.0
+  },
+  "bulky_categories": ["furniture", "appliances", "large"]
+}
