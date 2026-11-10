@@ -49,7 +49,8 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
         esc.append("tier_restricted")
     if mandate.approval in ("always", "shortlist"):
         esc.append(f"mandate_requires_approval:{mandate.approval}")
-    routine = confidence is not None and "routine_repeat_purchase" in confidence["signals"]
+    routine = (confidence is not None and "routine_repeat_purchase" in confidence["signals"]
+               and "routine_suspended" not in confidence["signals"])
     if req.amount > tier.cap:
         esc.append("above_tier_cap")
     elif req.amount > tier.effective_approval_over(profile.autonomy) and not routine:

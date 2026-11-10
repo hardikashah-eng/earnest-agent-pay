@@ -108,6 +108,20 @@ Every request gets a 0–1 confidence from four weighted factors, each 0–1 wit
 
 Agents call `check_merchant` (optionally with `mandate_id` and `quantity`) to see the same score before requesting, and can compare merchants and prices with it.
 
+### 3d. Verifying the item claim
+
+The confidence score trusts the `item` the agent names, so earnest checks it:
+
+1. **At checkout.** The credential carries an `item_lock`. When the merchant sends cart line items (ACP / UCP checkout data, an AP2 cart mandate, network line-item data), the charge is declined unless the claimed item is in the cart and other goods are at most 10% of it. Tax, shipping and fee lines are ignored.
+2. **After the fact.** `earnest reconcile` (run automatically after `earnest orders import`) matches each approved request that named an item with orders at the same merchant from 1 day before to 7 days after. A matching item → `verified`. A different item at about the same price (±15%) → `mismatch`. Nothing after 14 days → `unverified` (no penalty).
+
+| Event | Points |
+|---|---|
+| Item verified (cart or order) | +1 |
+| Item mismatch | −10 (a violation) |
+
+A mismatch also **suspends the agent's routine-repeat pass for 90 days** for that task type, and the false claim is dropped from the purchase history, so it can't build familiarity.
+
 ## 4. Scoring
 
 | Event | Points |

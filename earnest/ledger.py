@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS interests (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, item TEXT NOT NULL,
     merchant TEXT, max_price REAL, source TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS credentials (credential_id TEXT PRIMARY KEY, request_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS verifications (
+    request_id TEXT PRIMARY KEY, status TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memberships (
     user_id TEXT NOT NULL, merchant TEXT NOT NULL, program TEXT NOT NULL, at TEXT NOT NULL,
     PRIMARY KEY (user_id, merchant)
@@ -121,13 +125,17 @@ class Ledger:
     def purchases(self, user_id: str) -> list[dict]:
         """Approved requests with the user's verdict (if reported), oldest first."""
         rows = self.db.execute(
-            "SELECT r.merchant, r.amount, r.data, r.created_at, o.data AS outcome FROM requests r "
+            "SELECT r.id, r.agent_id, r.task_type, r.merchant, r.amount, r.data, r.created_at, "
+            "o.data AS outcome, v.status AS verification FROM requests r "
             "LEFT JOIN outcomes o ON o.request_id = r.id "
+            "LEFT JOIN verifications v ON v.request_id = r.id "
             "WHERE r.user_id = ? AND r.status = 'approved' ORDER BY r.created_at", (user_id,))
         out = []
         for r in rows:
             data = json.loads(r["data"])
-            out.append({"merchant": r["merchant"], "amount": r["amount"], "at": r["created_at"],
+            out.append({"request_id": r["id"], "agent_id": r["agent_id"], "task_type": r["task_type"],
+                        "verification": r["verification"],
+                        "merchant": r["merchant"], "amount": r["amount"], "at": r["created_at"],
                         "item": data.get("item"), "quantity": data.get("quantity", 1),
                         "verdict": json.loads(r["outcome"])["verdict"] if r["outcome"] else None})
         return out
@@ -214,6 +222,32 @@ class Ledger:
         return [dict(r) for r in self.db.execute(
             "SELECT DISTINCT merchant, status, reason, at FROM merchant_lists WHERE user_id = ? "
             "ORDER BY status, merchant", (user_id,))]
+
+    # --- credentials & verification ---
+    def link_credential(self, credential_id: str, request_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO credentials VALUES (?, ?)", (credential_id, request_id))
+
+    def request_for_credential(self, credential_id: str) -> str | None:
+        row = self.db.execute("SELECT request_id FROM credentials WHERE credential_id = ?",
+                              (credential_id,)).fetchone()
+        return row["request_id"] if row else None
+
+    def set_verification(self, request_id: str, status: str, detail: str, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO verifications VALUES (?, ?, ?, ?)",
+                            (request_id, status, detail, at.isoformat()))
+
+    def verification(self, request_id: str) -> dict | None:
+        row = self.db.execute("SELECT status, detail, at FROM verifications WHERE request_id = ?",
+                              (request_id,)).fetchone()
+        return dict(row) if row else None
+
+    def last_event(self, user_id: str, agent_id: str, task_type: str, kind: str) -> datetime | None:
+        row = self.db.execute(
+            "SELECT MAX(at) AS at FROM events WHERE user_id = ? AND agent_id = ? AND task_type = ? AND kind = ?",
+            (user_id, agent_id, task_type, kind)).fetchone()
+        return datetime.fromisoformat(row["at"]) if row and row["at"] else None
 
     # --- outcomes ---
     def add_outcome(self, o: Outcome, at: datetime) -> None:
