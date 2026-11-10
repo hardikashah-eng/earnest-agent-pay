@@ -55,6 +55,11 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 - Email receipts from mbox (Google Takeout), Maildir, .eml or IMAP, read only from verified merchant domains with DKIM pass; refunds/returns skipped; order + shipping emails deduplicated.
 - Product IDs (ASIN, GTIN with check digit, retailer SKU) from exports, receipt links and agent requests; used for same-item matching and cart checks.
 
+## Smarter scoring (v0.3) — done
+
+- Per-user confidence weights learned from verdicts, shrunk to defaults, kept only when they beat defaults on held-out data, with a calibration report.
+- Market price quotes (connector / CSV / agent), cheaper-elsewhere and wait suggestions. Next: a price-tracker connector (e.g. Keepa for Amazon).
+
 ## Next (v0.2+)
 
 - Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.

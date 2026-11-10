@@ -216,6 +216,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--days", type=int, default=180, help="IMAP: how far back to look")
     p.add_argument("--allow-unauthenticated", action="store_true",
                    help="accept receipts without a DKIM pass (not recommended)")
+    p = sub.add_parser("confidence", help="learn your confidence weights from your verdicts")
+    p.add_argument("action", choices=["fit", "report", "reset", "show"])
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("prices", help="market price quotes from other stores")
+    p.add_argument("action", choices=["add", "import", "list"])
+    p.add_argument("args", nargs="*", help="add: MERCHANT ITEM PRICE; import: CSV (merchant,item,price[,product_id,url])")
+    p.add_argument("--product-id")
+    p.add_argument("--url")
     p = sub.add_parser("serve", help="serve approval links (and the Stripe webhook) over HTTP")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8787)
@@ -288,6 +296,34 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "confidence":
+            if args.action in ("fit", "report"):
+                _print(gw.fit_confidence(args.user, save=args.action == "fit"))
+            elif args.action == "reset":
+                gw.ledger.set_confidence_weights(args.user, None, gw.clock())
+                print("back to default weights")
+            else:
+                _print(gw.ledger.confidence_weights(args.user) or {"weights": "default"})
+        elif args.cmd == "prices":
+            if args.action == "add":
+                if len(args.args) != 3:
+                    ap.error("prices add MERCHANT ITEM PRICE")
+                gw.report_price(args.args[0], args.args[1], float(args.args[2]), "user", args.product_id, args.url)
+                print("added")
+            elif args.action == "import":
+                import csv
+                if len(args.args) != 1:
+                    ap.error("prices import FILE.csv")
+                n = 0
+                with open(args.args[0], newline="", encoding="utf-8-sig") as f:
+                    for row in csv.DictReader(f):
+                        row = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k}
+                        gw.report_price(row["merchant"], row["item"], float(row["price"].lstrip("$")),
+                                        "user", row.get("product_id") or None, row.get("url") or None)
+                        n += 1
+                print(f"added {n} quotes")
+            else:
+                _print(gw.ledger.price_quotes("0000-01-01"))
         elif args.cmd == "receipts":
             from .insights.receipts import import_receipts, read_imap, read_path, retailer_domains, since_days
             if args.action == "import":

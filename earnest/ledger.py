@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS interests (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, item TEXT NOT NULL,
     merchant TEXT, max_price REAL, source TEXT NOT NULL, at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS confidence_weights (user_id TEXT PRIMARY KEY, data TEXT NOT NULL, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS price_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, merchant TEXT NOT NULL, item TEXT NOT NULL, price REAL NOT NULL,
+    date TEXT NOT NULL, source TEXT NOT NULL, product_id TEXT, url TEXT, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (credential_id TEXT PRIMARY KEY, request_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS verifications (
@@ -236,6 +241,50 @@ class Ledger:
         return [dict(r) for r in self.db.execute(
             "SELECT DISTINCT merchant, status, reason, at FROM merchant_lists WHERE user_id = ? "
             "ORDER BY status, merchant", (user_id,))]
+
+    # --- learned confidence weights ---
+    def confidence_weights(self, user_id: str) -> dict | None:
+        row = self.db.execute("SELECT data FROM confidence_weights WHERE user_id = ?", (user_id,)).fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def set_confidence_weights(self, user_id: str, weights: dict | None, at: datetime) -> None:
+        with self.db:
+            if weights is None:
+                self.db.execute("DELETE FROM confidence_weights WHERE user_id = ?", (user_id,))
+            else:
+                self.db.execute("INSERT OR REPLACE INTO confidence_weights VALUES (?, ?, ?)",
+                                (user_id, json.dumps(weights), at.isoformat()))
+
+    def labeled_purchases(self, user_id: str) -> list[tuple[dict, bool]]:
+        """(factor scores, kept?) for every scored purchase the user has given a verdict on.
+        An item mismatch counts as not kept."""
+        rows = self.db.execute(
+            "SELECT r.decision, o.data AS outcome, v.status AS verification FROM requests r "
+            "LEFT JOIN outcomes o ON o.request_id = r.id LEFT JOIN verifications v ON v.request_id = r.id "
+            "WHERE r.user_id = ? AND r.status = 'approved' ORDER BY r.created_at", (user_id,))
+        out = []
+        for r in rows:
+            factors = ((json.loads(r["decision"]).get("confidence") or {}).get("factors"))
+            if not factors:
+                continue
+            if r["verification"] == "mismatch":
+                out.append((factors, False))
+            elif r["outcome"]:
+                out.append((factors, json.loads(r["outcome"])["verdict"] == "accepted"))
+        return out
+
+    # --- market price quotes ---
+    def add_price_quote(self, q, at: datetime) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO price_quotes (merchant, item, price, date, source, product_id, url, at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (q.merchant, q.item, q.price, q.on.isoformat(), q.source, q.product_id, q.url, at.isoformat()))
+
+    def price_quotes(self, since: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT merchant, item, price, date, source, product_id, url FROM price_quotes WHERE date >= ? "
+            "ORDER BY date", (since,))]
 
     # --- local secrets (approval links, attestations) ---
     def secret(self, name: str) -> bytes:

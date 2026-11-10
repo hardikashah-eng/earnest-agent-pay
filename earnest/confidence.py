@@ -53,7 +53,30 @@ def _over(amount: float, ceiling: float, slope: float = 1.5) -> float:
     return max(0.1, round(1 - (amount / ceiling - 1) * slope, 2))
 
 
-def price(unit_amount: float, h: History, benchmark: float | None) -> tuple[float, str, list[str]]:
+WAIT_PRICE_JUMP = 1.2    # paying 20%+ over the lowest recent price...
+WAIT_MIN_DAYS = 14       # ...with two weeks or more to the deadline: suggest waiting
+
+
+def price(unit_amount: float, h: History, benchmark: float | None, market=None,
+          market_adjust: tuple[list[str], float | None] = ([], None),
+          days_to_deadline: int | None = None) -> tuple[float, str, list[str]]:
+    f, why, signals = _history_price(unit_amount, h, benchmark, market)
+    m_signals, adjust = market_adjust
+    signals += m_signals
+    if adjust is not None and adjust < 0:
+        f = min(f, -adjust)
+        why += f"; {m_signals[0].split(':')[1]} has it for ${market.best_price:.2f}"
+    elif adjust is not None and adjust > 0:
+        f = max(f, adjust)
+        why += "; best price among verified stores this week"
+    if (h.same_item_prices and unit_amount > WAIT_PRICE_JUMP * min(h.same_item_prices)
+            and (days_to_deadline is None or days_to_deadline >= WAIT_MIN_DAYS)):
+        signals.append(f"consider_waiting:{min(h.same_item_prices):.2f}")
+    return f, why, signals
+
+
+def _history_price(unit_amount: float, h: History, benchmark: float | None,
+                   market=None) -> tuple[float, str, list[str]]:
     signals: list[str] = []
     if h.same_item_prices:
         hi, med = max(h.same_item_prices), median(h.same_item_prices)
@@ -75,6 +98,9 @@ def price(unit_amount: float, h: History, benchmark: float | None) -> tuple[floa
     if h.interest and h.interest.max_price:
         ok = unit_amount <= h.interest.max_price
         return (0.9 if ok else 0.3), f"user said up to ${h.interest.max_price:.2f}", signals
+    if market is not None:
+        return (min(0.85, _over(unit_amount, market.median_price * 1.1)),
+                f"vs ${market.median_price:.2f} median at verified stores this week", signals)
     if benchmark:
         return min(0.8, _over(unit_amount, benchmark * 1.1)), f"vs mandate benchmark ${benchmark:.2f}", signals
     return 0.5, "no price reference", ["no_price_reference"]
@@ -113,20 +139,27 @@ def budget(amount: float, budget_max: float | None, spent: float,
 def score(check: MerchantCheck, h: History, *, amount: float, quantity: int = 1,
           item: str | None = None, intent_match: bool = False, benchmark: float | None = None,
           budget_max: float | None = None, spent: float = 0.0, budget_min: float | None = None,
-          extra_signals: list[str] = ()) -> dict:
+          extra_signals: list[str] = (), weights: dict[str, float] | None = None, market=None,
+          market_adjust: tuple[list[str], float | None] = ([], None),
+          days_to_deadline: int | None = None) -> dict:
+    weights = weights or WEIGHTS
     unit = amount / max(1, quantity)
     a, a_why = authenticity(check, h)
-    p, p_why, p_sig = price(unit, h, benchmark)
+    p, p_why, p_sig = price(unit, h, benchmark, market, market_adjust, days_to_deadline)
     f, f_why = familiarity(h, item, intent_match)
     b, b_why = budget(amount, budget_max, spent, budget_min)
     factors = {"authenticity": {"score": a, "why": a_why}, "price": {"score": p, "why": p_why},
                "familiarity": {"score": f, "why": f_why}, "budget": {"score": b, "why": b_why}}
-    total = 0.0 if check.status == "untrusted" else sum(WEIGHTS[k] * v["score"] for k, v in factors.items())
+    total = 0.0 if check.status == "untrusted" else sum(weights[k] * v["score"] for k, v in factors.items())
     total = round(total, 2)
     signals = [*check.reasons, *h.signals, *p_sig, *extra_signals]
     routine = (h.same_item > 0 and "price_in_range" in signals and check.status != "suspicious"
                and a >= 0.7 and total >= ROUTINE_REPEAT_MIN)
     if routine:
         signals.append("routine_repeat_purchase")
-    return {"level": _level(total), "score": total, "factors": factors, "weights": WEIGHTS,
-            "merchant": check.to_dict(), "history": h.to_dict(), "signals": signals}
+    out = {"level": _level(total), "score": total, "factors": factors, "weights": dict(weights),
+           "weights_source": "default" if weights is WEIGHTS else "learned",
+           "merchant": check.to_dict(), "history": h.to_dict(), "signals": signals}
+    if market is not None:
+        out["market"] = market.to_dict()
+    return out

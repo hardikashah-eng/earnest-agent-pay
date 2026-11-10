@@ -57,6 +57,9 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
         # a high-confidence repeat of something the user bought and kept, at a price in
         # range, doesn't need the approval threshold; the tier cap still applies
         esc.append("above_approval_threshold")
+    cheaper = [s for s in (confidence or {}).get("signals", []) if s.startswith("cheaper_elsewhere:")]
+    if cheaper and profile.price_sensitivity >= 0.7:
+        esc.append(cheaper[0])
     if confidence is not None and confidence["score"] < profile.min_confidence:
         esc.append(f"low_confidence:{confidence['score']:.2f}")
     if merchant is not None and merchant.status == "suspicious":

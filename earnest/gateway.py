@@ -10,6 +10,8 @@ from . import ap2
 from .approvals import ApprovalMessage, make_token, read_token
 from .backends.mock import MockBackend
 from .confidence import score as confidence_score
+from .learning import FACTORS, Sample, learn
+from .market import MAX_AGE_DAYS, PriceQuote, market_signals, market_view
 from .history import Interest, PastPurchase, item_tokens, summarize
 from .ledger import Ledger
 from .merchants import MerchantRegistry
@@ -126,12 +128,22 @@ class Gateway:
         if category and self.merchants.high_risk_category(category):
             extra.append(f"high_risk_category:{category}")
         intent_match = bool(item and mandate and item_tokens(item) & item_tokens(mandate.intent))
+        today = self.clock().date()
+        quotes = [PriceQuote(q["merchant"], q["item"], q["price"], date.fromisoformat(q["date"]), q["source"],
+                             q["product_id"], q["url"])
+                  for q in self.ledger.price_quotes((today - timedelta(days=MAX_AGE_DAYS)).isoformat())]
+        market = market_view(quotes, item, product_id, today,
+                             lambda m: self.merchants.check(m).status == "verified")
+        adjust = market_signals(amount / max(1, quantity), keys, market, self.merchants.canonical)
+        days_left = (mandate.deadline - today).days if mandate and mandate.deadline else None
         conf = confidence_score(
             check, hist, amount=amount, quantity=quantity, item=item, intent_match=intent_match,
             benchmark=mandate.benchmark_price if mandate else None,
             budget_max=mandate.budget_max if mandate else None,
             spent=self.ledger.spent_on_mandate(mandate.id) if mandate else 0.0,
-            budget_min=mandate.budget_min if mandate else None, extra_signals=extra)
+            budget_min=mandate.budget_min if mandate else None, extra_signals=extra,
+            weights=self.ledger.confidence_weights(user_id), market=market, market_adjust=adjust,
+            days_to_deadline=days_left)
         return check, hist, known, conf
 
     def check_merchant(self, user_id: str, merchant: str, item: str | None = None, amount: float = 0.0,
@@ -264,6 +276,23 @@ class Gateway:
     def _routine_suspended(self, user_id: str, agent_id: str, task_type: str, now: datetime) -> bool:
         last = self.ledger.last_event(user_id, agent_id, task_type, "item_mismatch")
         return last is not None and now - last < timedelta(days=MISMATCH_SUSPENDS_DAYS)
+
+    # --- learned confidence weights (spec section 3e) ---
+    def fit_confidence(self, user_id: str, save: bool = True) -> dict:
+        samples = [Sample(tuple(float(f[k]["score"]) for k in FACTORS), kept)
+                   for f, kept in self.ledger.labeled_purchases(user_id)]
+        report = learn(samples)
+        if save:
+            self.ledger.set_confidence_weights(
+                user_id, report["weights"] if report["status"] == "learned" else None, self.clock())
+        return report
+
+    # --- market prices ---
+    def report_price(self, merchant: str, item: str, price: float, source: str = "user",
+                     product_id: str | None = None, url: str | None = None) -> None:
+        from .products import normalize
+        self.ledger.add_price_quote(PriceQuote(merchant, item, round(price, 2), self.clock().date(), source,
+                                               normalize(product_id), url), self.clock())
 
     # --- approvals on your phone or in chat ---
     def approval_links(self, request_id: str) -> tuple[str, str]:

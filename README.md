@@ -101,6 +101,8 @@ python -m earnest merchant distrust sketchy-deals.shop --user user_demo --reason
 python -m earnest merchant import-blocklist fraud-feed.txt --user user_demo   # one domain per line
 ```
 
+**It learns what matters to you.** `earnest confidence fit` learns your factor weights from your verdicts (kept only if they predict better than the defaults on held-out data). **Market prices** from other verified stores flag when it's cheaper elsewhere (frugal profiles get asked) and suggest waiting when the price is well above what you usually pay.
+
 **Agents can't fake the item.** Cards are locked to the claimed item: a cart without it is declined. Orders are reconciled after the fact (`earnest reconcile`); a mismatch costs −10 and suspends the routine pass for 90 days.
 
 **Email receipts** cover stores without an order export (Costco, Walmart, Target, …). Only mail from a verified merchant's domain with a DKIM pass is read, refunds and returns are skipped, and an order's confirmation and shipping emails count once:
