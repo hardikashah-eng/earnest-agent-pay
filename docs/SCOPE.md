@@ -64,6 +64,12 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 
 - Reorder prediction and standing mandates; follow-ups (verdicts, delivery, price drops, renewals) with auto-accept of kept purchases; return checker (policy data, pre-purchase signal, deadlines); households (allowances, monthly budget, two-adult approvals); dispute evidence packs.
 
+## Network (v0.3) — done
+
+- Portable Ed25519-signed agent trust records with capped, issuer-gated head starts.
+- Opt-in shared merchant reputation with local differential privacy and k-anonymous feeds.
+- Next: bind records to an agent identity key (challenge-response, or an agent-identity protocol such as Visa TAP), and a hosted aggregator.
+
 ## Next (v0.2+)
 
 - Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.
@@ -76,7 +82,7 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 ## Out of scope (for now)
 
 - Real money, production card issuing, KYC.
-- A cross-bank, portable reputation network.
+- A hosted, cross-bank reputation service (v0.3 ships the file-based, opt-in version).
 - Crypto rails (x402, smart-wallet spend permissions); possible future backends.
 
 ## Design principles

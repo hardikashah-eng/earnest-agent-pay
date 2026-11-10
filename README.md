@@ -149,6 +149,18 @@ python -m earnest approve <request_id> --as user_partner
 
 Standing mandates let an agent restock without asking, only for that item, at or under that price, and not more often than the interval. Purchases verified and kept past the return window count as accepted automatically, so trust grows without you reporting every good outcome.
 
+## Trust that travels, and reputation that's shared
+
+```bash
+python -m earnest trust export agent_x.jwt --user user_demo --agent agent_shopper --task software
+python -m earnest trust import agent_x.jwt --user friend --trust-issuer     # head start, capped at "established"
+python -m earnest reputation contribute my-contribution.json --user user_demo   # noisy counts, no identity
+python -m earnest reputation aggregate contributions/ --out feed.json --k 5
+python -m earnest reputation import feed.json
+```
+
+Trust records are Ed25519-signed and carry coarse bands only. Reputation contributions add differential-privacy noise on your machine, and a merchant only appears in a feed once five or more people contributed.
+
 ## Spending insights
 
 Import your card statements and get the **top 5 things worth knowing each month**: fees you could avoid, prices that crept up, overlapping subscriptions, cheaper stores you already use, delivery habits and unusual spikes. Everything stays in your local SQLite file.

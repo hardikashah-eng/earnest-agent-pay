@@ -152,6 +152,12 @@ A household groups users as `adult` or `child`:
 - Purchases over `second_approval_over` need two different adults (`household:needs_two_adults`; after the first approval the request stays escalated with `awaiting_second_approval`).
 - Approval messages go to each adult with links bound to that adult.
 
+### 3h. Portable trust and shared reputation
+
+**Portable trust records.** `earnest trust export` issues a JWT signed with EdDSA (Ed25519) by the user's install, about one agent and task type: tier, purchase-count band, verified-item band, kept rate (one decimal), violations in the last 90 days, valid 30 days. No merchants, items, amounts or user identity beyond a pseudonymous key. On import the signature, issuer and expiry are checked, and the issuer must be one the importing user chose to trust. The head start is `trusted` → up to 20 points (`established`), `established` → 10, nothing with recent violations or a kept rate under 0.8, once per agent, task type and issuer.
+
+**Shared merchant reputation (opt-in).** A contribution holds per-merchant purchase and problem counts (item mismatch, rejected/disputed, never verified) with Laplace noise added locally (ε per count, default 1) under a one-time random id. An aggregator publishes merchants with ≥ 5 contributors. Imported feed entries with ≥ 10 contributors change decisions: an unknown merchant with problem rate ≥ 30% becomes **suspicious** (escalated); an unknown merchant with ≤ 5% over 50+ purchases gets authenticity 0.6; verified merchants only get a signal. The user's own lists still win.
+
 ## 4. Scoring
 
 | Event | Points |

@@ -43,6 +43,8 @@ def authenticity(check: MerchantCheck, h: History) -> tuple[float, str]:
         return 0.9, "user is a member here"
     if h.merchant_purchases:
         return 0.7, f"user has bought here {h.merchant_purchases} time(s)"
+    if "merchant_reputation:good" in check.reasons:
+        return 0.6, "unknown to you, clean record across other earnest users"
     return 0.4, "unknown merchant, no history"
 
 

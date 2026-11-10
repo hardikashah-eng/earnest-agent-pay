@@ -246,6 +246,21 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dispute", help="build an evidence pack for a purchase (JSON + Markdown)")
     p.add_argument("request_id")
     p.add_argument("--out", help="folder to write <request_id>.json and .md into")
+    p = sub.add_parser("trust", help="portable, signed agent trust records")
+    p.add_argument("action", choices=["export", "import", "verify"])
+    p.add_argument("file", nargs="?", help="record file (import / verify); output file for export")
+    p.add_argument("--user")
+    p.add_argument("--agent")
+    p.add_argument("--task")
+    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--trust-issuer", action="store_true", help="import: you know and trust who issued it")
+    p = sub.add_parser("reputation", help="opt-in shared merchant reputation (noisy, anonymous)")
+    p.add_argument("action", choices=["contribute", "aggregate", "import"])
+    p.add_argument("path", nargs="?", help="contribute: output file; aggregate: folder of contributions; import: feed")
+    p.add_argument("--user")
+    p.add_argument("--epsilon", type=float, default=1.0, help="privacy budget per count (lower = noisier)")
+    p.add_argument("--out", help="aggregate: feed output file")
+    p.add_argument("--k", type=int, default=5, help="aggregate: minimum contributors per merchant")
     p = sub.add_parser("serve", help="serve approval links (and the Stripe webhook) over HTTP")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8787)
@@ -318,6 +333,38 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "trust":
+            if args.action == "export":
+                if not (args.user and args.agent and args.task):
+                    ap.error("trust export needs --user, --agent and --task")
+                token = gw.export_trust_record(args.user, args.agent, args.task, args.days)
+                if args.file:
+                    Path(args.file).write_text(token + "\n")
+                    print(f"wrote {args.file}")
+                else:
+                    print(token)
+            elif args.action == "import":
+                if not (args.file and args.user):
+                    ap.error("trust import FILE --user USER")
+                _print(gw.import_trust_record(args.user, Path(args.file).read_text(), args.trust_issuer))
+            else:
+                from .portable import decode
+                claims, kid = decode(Path(args.file).read_text(), gw.clock())
+                _print({"valid": True, "issuer": kid, **claims})
+        elif args.cmd == "reputation":
+            from .reputation import aggregate
+            if args.action == "contribute":
+                if not (args.user and args.path):
+                    ap.error("reputation contribute OUT.json --user USER")
+                Path(args.path).write_text(json.dumps(gw.reputation_contribution(args.user, args.epsilon), indent=1))
+                print(f"wrote {args.path} (noisy counts only; share it if you choose)")
+            elif args.action == "aggregate":
+                files = sorted(Path(args.path).glob("*.json"))
+                feed = aggregate([json.loads(f.read_text()) for f in files], args.k)
+                Path(args.out or "reputation-feed.json").write_text(json.dumps(feed, indent=1))
+                print(f"{len(feed['merchants'])} merchants with {args.k}+ contributors")
+            else:
+                print(f"imported {gw.import_reputation_feed(_load(args.path))} merchants")
         elif args.cmd == "reorder":
             if args.action == "list":
                 _print(gw.reorder_predictions(args.user, args.within))

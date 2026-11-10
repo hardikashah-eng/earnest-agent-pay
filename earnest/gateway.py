@@ -122,6 +122,7 @@ class Gateway:
         Returns (MerchantCheck, History, is_known_merchant, confidence dict)."""
         check = self.merchants.check(merchant, self.ledger.merchant_overrides(user_id))
         keys = self.merchants.canonical(merchant)
+        self._apply_reputation(check, merchant)
         past = self._past_purchases(user_id)
         hist = summarize(keys, past, item, self.clock().date(), self._interests(user_id),
                          self._memberships_at(user_id, keys), product_id)
@@ -464,6 +465,86 @@ class Gateway:
                      approvals=self.ledger.approvals(request_id),
                      verification=self.ledger.verification(request_id),
                      outcome=self.ledger.get_outcome(request_id), orders=orders, intent_mandate=intent)
+
+    # --- portable trust & shared reputation (spec section 3h) ---
+    def _issuer_secret(self) -> bytes:
+        return self.ledger.secret("issuer_ed25519")
+
+    def export_trust_record(self, user_id: str, agent_id: str, task_type: str, ttl_days: int = 30) -> str:
+        from . import portable
+        now = self.clock()
+        _, t = self.tier(user_id, agent_id, task_type)
+        mine = [p for p in self.ledger.purchases(user_id) if p["agent_id"] == agent_id and p["task_type"] == task_type]
+        verified = sum(p["verification"] == "verified" for p in mine)
+        judged = [p for p in mine if p["verdict"] or p["verification"] == "mismatch"]
+        kept = sum(p["verdict"] == "accepted" and p["verification"] != "mismatch" for p in judged)
+        bad = self.ledger.count_events_since(user_id, agent_id, task_type, ("violation", "item_mismatch"),
+                                             (now - timedelta(days=90)).isoformat())
+        kid = portable._b64(portable.ed25519.public_key(self._issuer_secret()))
+        claims = portable.claims_for(agent_id, task_type, t.name, len(mine), verified,
+                                     kept / len(judged) if judged else None, bad, kid, now, ttl_days)
+        return portable.encode(claims, self._issuer_secret())
+
+    def import_trust_record(self, user_id: str, token: str, trust_issuer: bool = False) -> dict:
+        from . import portable
+        now = self.clock()
+        try:
+            claims, kid = portable.decode(token, now)
+        except ValueError as e:
+            raise ValidationError(str(e)) from None
+        if kid not in self.ledger.trusted_issuers(user_id):
+            if not trust_issuer:
+                raise ValidationError(f"issuer {kid[:12]}... isn't one you trust yet; import with trust_issuer "
+                                      "(CLI: --trust-issuer) if you know who issued it")
+            self.ledger.trust_issuer(user_id, kid, now)
+        agent, task = claims["sub"], claims["trust"]["task_type"]
+        seed = portable.seed_points(claims)
+        marker = f"import:{kid}"
+        added = 0.0
+        if seed and not self.ledger.has_event(user_id, agent, task, "imported_trust", marker):
+            current = self.ledger.score(user_id, agent, task, now)
+            added = max(0.0, seed - current)
+            self.ledger.add_points(user_id, agent, task, "imported_trust", added, marker, now)
+        return {"agent_id": agent, "task_type": task, "issuer": kid, "record": claims["trust"],
+                "head_start": seed, "points_added": round(added, 2),
+                "tier_now": self.limits(user_id, agent, task)["tier"]}
+
+    def _rep_key(self, merchant: str) -> str:
+        from .merchants import host_of, name_key
+        v = self.merchants.find_verified(merchant)
+        return "id:" + v.id if v else (host_of(merchant) or name_key(merchant))
+
+    def merchant_stats(self, user_id: str) -> dict[str, dict]:
+        stats: dict[str, dict] = {}
+        for p in self.ledger.purchases(user_id):
+            s = stats.setdefault(self._rep_key(p["merchant"]), {"purchases": 0, "problems": 0})
+            s["purchases"] += 1
+            if p["verification"] in ("mismatch", "unverified") or p["verdict"] in ("rejected", "disputed"):
+                s["problems"] += 1
+        return stats
+
+    def reputation_contribution(self, user_id: str, epsilon: float = 1.0) -> dict:
+        from .reputation import contribution
+        return contribution(self.merchant_stats(user_id), epsilon)
+
+    def import_reputation_feed(self, feed: dict) -> int:
+        self.ledger.set_reputation_feed(feed.get("merchants", {}), self.clock())
+        return len(feed.get("merchants", {}))
+
+    def _apply_reputation(self, check, merchant: str) -> None:
+        from .reputation import judge
+        entry = self.ledger.reputation({self._rep_key(merchant)})
+        verdict = judge(entry)
+        if verdict is None or check.status in ("untrusted", "user_trusted"):
+            return
+        if verdict == "bad":
+            tag = f"merchant_reputation:bad:{entry['problem_rate']:.2f}"
+            if check.status == "unknown":
+                check.status, check.reasons = "suspicious", [tag]
+            else:
+                check.reasons.append(tag)
+        elif check.status == "unknown":
+            check.reasons.append("merchant_reputation:good")
 
     # --- learned confidence weights (spec section 3e) ---
     def fit_confidence(self, user_id: str, save: bool = True) -> dict:
