@@ -4,37 +4,74 @@
   "title": "Profile",
   "description": "How a person likes money spent on their behalf. Stays with the user; never sent to merchants.",
   "type": "object",
-  "required": ["user_id"],
+  "required": [
+    "user_id"
+  ],
   "properties": {
-    "user_id": { "type": "string" },
+    "user_id": {
+      "type": "string"
+    },
     "price_sensitivity": {
-      "type": "number", "minimum": 0, "maximum": 1, "default": 0.5,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5,
       "description": "0 = convenience-first (speed matters more than price), 1 = frugal (price matters most)."
     },
     "autonomy": {
-      "type": "number", "minimum": 0, "maximum": 1, "default": 0.5,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5,
       "description": "0 = ask me about everything, 1 = just handle it. Scales the approval threshold."
     },
     "novelty": {
-      "type": "number", "minimum": 0, "maximum": 1, "default": 0.5,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5,
       "description": "0 = familiar merchants only, 1 = happy to try new ones."
     },
     "privacy": {
-      "type": "number", "minimum": 0, "maximum": 1, "default": 0.5,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5,
       "description": "Higher = prefer single-use credentials and minimal data sharing."
     },
     "explanation_style": {
-      "type": "string", "enum": ["plain", "brief_technical", "detailed"], "default": "plain"
+      "type": "string",
+      "enum": [
+        "plain",
+        "brief_technical",
+        "detailed"
+      ],
+      "default": "plain"
     },
     "hard_rules": {
       "type": "array",
-      "items": { "type": "string", "enum": ["no_subscriptions", "no_new_merchants", "no_international"] },
+      "items": {
+        "type": "string",
+        "enum": [
+          "no_subscriptions",
+          "no_new_merchants",
+          "no_international"
+        ]
+      },
       "default": [],
       "description": "Rules that always apply, regardless of trust tier."
     },
     "min_confidence": {
-      "type": "number", "minimum": 0, "maximum": 1, "default": 0.35,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.35,
       "description": "Purchases scoring below this confidence (SPEC.md section 3c) are escalated to the user."
+    },
+    "auto_accept_kept": {
+      "type": "boolean",
+      "default": true,
+      "description": "Verified purchases kept past the return window count as accepted."
     }
   },
   "additionalProperties": false

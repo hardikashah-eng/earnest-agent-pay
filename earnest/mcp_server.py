@@ -86,6 +86,13 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
 
 
 @mcp.tool()
+def get_reorder_suggestions(within_days: int = 14) -> list[dict]:
+    """Items the user buys regularly that are due soon (item, usual store, typical price,
+    interval, next due date). Standing mandates (list_mandates) pre-approve some restocks."""
+    return _gateway.reorder_predictions(USER_ID, within_days)
+
+
+@mcp.tool()
 def report_price(merchant: str, item: str, price: float, product_id: str = "", url: str = "") -> dict:
     """Report a price you saw for an item at a store while shopping. Reports from agents can
     only flag that a cheaper store exists; they never raise confidence in a price."""

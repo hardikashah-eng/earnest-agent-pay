@@ -132,6 +132,26 @@ A mismatch also **suspends the agent's routine-repeat pass for 90 days** for tha
 - No personal price history → the market median is the price reference.
 - Paying ≥ 20% over the lowest recent price the user paid, with ≥ 14 days to the deadline (or none) → `consider_waiting:<price>`.
 
+### 3f. Reorders, follow-ups, returns and disputes
+
+**Reorder prediction.** Items bought 3+ times (same product ID or same-item text, any source) get an interval (median gap), a regularity score, the usual store, a typical recent price and a next-due date.
+
+**Standing mandates** pre-approve a repeat purchase (`mandate.standing`: `item`, optional `product_id`, `max_unit_price`, `min_interval_days`). Requests against one are denied as violations if the item isn't the same (`standing:item_mismatch`), the unit price is over the limit (`standing:over_price`) or the last purchase of that item was too recent (`standing:too_soon`). The budget is per cycle. A valid standing purchase skips the approval-threshold check (check 9) like a routine repeat; the tier cap still applies.
+
+**Return checker.** Standard return windows for major merchants are data ([earnest/data/return_policies.json](../earnest/data/return_policies.json), with category exceptions and membership extensions). Every confidence block carries `returnable:<days>` (or `open_ended`, or `return_policy_unknown`). A mandate with `requires_returnable` escalates when the policy is unknown, and sets AP2 `requires_refundability`. After purchase, rejected or disputed items that can still be returned are flagged first, then windows closing within 7 days.
+
+**Follow-ups** (`earnest followup`): verdict reminders after 7 days; "did it arrive?" after 10 days without a matching order; price drops of 5%+ at the same store (newer orders or non-agent quotes) while returnable; subscription renewals within 5 days. Purchases that were **verified and kept past the return window** (30 days if unknown) are accepted automatically (profile `auto_accept_kept`, default on).
+
+**Dispute pack** (`earnest dispute <request_id>`): mandate, agent request and reason, decision and confidence, approvals, credential, item verification, verdict, matching orders, AP2 intent mandate and a timeline, as JSON with a SHA-256 and a Markdown summary with a suggested dispute reason.
+
+### 3g. Households
+
+A household groups users as `adult` or `child`:
+- Children's requests always escalate to an adult (`household:child_needs_guardian`); a child can't approve.
+- A child's `monthly_allowance` and the household `monthly_budget` cap approved spending this calendar month (deny: `household:over_allowance`, `household:over_monthly_budget`).
+- Purchases over `second_approval_over` need two different adults (`household:needs_two_adults`; after the first approval the request stays escalated with `awaiting_second_approval`).
+- Approval messages go to each adult with links bound to that adult.
+
 ## 4. Scoring
 
 | Event | Points |

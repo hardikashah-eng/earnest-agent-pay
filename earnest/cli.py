@@ -156,8 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("request", help="submit a spend request from JSON (simulates an agent)").add_argument("file")
     p = sub.add_parser("pending", help="list requests waiting for your approval")
     p.add_argument("--user", required=True)
-    sub.add_parser("approve", help="approve an escalated request").add_argument("request_id")
-    sub.add_parser("deny", help="deny an escalated request").add_argument("request_id")
+    p.add_argument("--household", action="store_true", help="include your household's requests")
+    for name in ("approve", "deny"):
+        p = sub.add_parser(name, help=f"{name} an escalated request")
+        p.add_argument("request_id")
+        p.add_argument("--as", dest="approver", help="household member acting (default: the requester)")
     p = sub.add_parser("outcome", help="report your verdict on a purchase")
     p.add_argument("request_id")
     p.add_argument("verdict", choices=["accepted", "rejected", "disputed"])
@@ -224,6 +227,25 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("args", nargs="*", help="add: MERCHANT ITEM PRICE; import: CSV (merchant,item,price[,product_id,url])")
     p.add_argument("--product-id")
     p.add_argument("--url")
+    p = sub.add_parser("reorder", help="items you buy regularly; standing (pre-approved) restocks")
+    p.add_argument("action", choices=["list", "standing"])
+    p.add_argument("item", nargs="?")
+    p.add_argument("--user", required=True)
+    p.add_argument("--within", type=int, help="list: only items due within N days")
+    p.add_argument("--max-price", type=float, help="standing: highest unit price allowed")
+    p.add_argument("--every-days", type=int, help="standing: not more often than this")
+    p.add_argument("--product-id")
+    p.add_argument("--task-type", default="household")
+    p = sub.add_parser("followup", help="what needs your attention after purchases (auto-accepts kept items)")
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("returns", help="return deadlines, and rejected items you can still send back")
+    p.add_argument("--user", required=True)
+    p = sub.add_parser("household", help="shared budgets, kids' allowances, two-adult approvals")
+    p.add_argument("action", choices=["set", "show"])
+    p.add_argument("file_or_user", help="set: household JSON file; show: a member's user id")
+    p = sub.add_parser("dispute", help="build an evidence pack for a purchase (JSON + Markdown)")
+    p.add_argument("request_id")
+    p.add_argument("--out", help="folder to write <request_id>.json and .md into")
     p = sub.add_parser("serve", help="serve approval links (and the Stripe webhook) over HTTP")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8787)
@@ -273,9 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "request":
             _print(gw.request_spend(_load(args.file)).to_dict())
         elif args.cmd == "pending":
-            _print(gw.pending(args.user))
+            _print(gw.pending_for(args.user) if args.household else gw.pending(args.user))
         elif args.cmd in ("approve", "deny"):
-            _print(gw.resolve(args.request_id, approve=args.cmd == "approve").to_dict())
+            _print(gw.resolve(args.request_id, approve=args.cmd == "approve", approver=args.approver).to_dict())
         elif args.cmd == "outcome":
             outcome = {"request_id": args.request_id, "verdict": args.verdict, "on_time": not args.late}
             if args.note:
@@ -296,6 +318,38 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "reorder":
+            if args.action == "list":
+                _print(gw.reorder_predictions(args.user, args.within))
+            else:
+                if not (args.item and args.max_price and args.every_days):
+                    ap.error("reorder standing ITEM --max-price P --every-days N")
+                _print(gw.add_standing_mandate(args.user, args.item, args.max_price, args.every_days,
+                                               args.task_type, args.product_id).to_dict())
+        elif args.cmd == "followup":
+            _print(gw.followups(args.user))
+        elif args.cmd == "returns":
+            _print(gw.return_reminders(args.user))
+        elif args.cmd == "household":
+            if args.action == "set":
+                h = _load(args.file_or_user)
+                gw.set_household(h["id"], h["name"], h["members"], h.get("monthly_budget"),
+                                 h.get("second_approval_over"))
+                print(f"saved household {h['id']}")
+            else:
+                h = gw.ledger.household_for(args.file_or_user)
+                _print(h.__dict__ if h else f"{args.file_or_user} isn't in a household")
+        elif args.cmd == "dispute":
+            from .disputes import to_markdown
+            pack = gw.dispute_pack(args.request_id)
+            if args.out:
+                out = Path(args.out)
+                out.mkdir(parents=True, exist_ok=True)
+                (out / f"{args.request_id}.json").write_text(json.dumps(pack, indent=2, default=str))
+                (out / f"{args.request_id}.md").write_text(to_markdown(pack))
+                print(f"wrote {out / args.request_id}.json and .md")
+            else:
+                print(to_markdown(pack))
         elif args.cmd == "confidence":
             if args.action in ("fit", "report"):
                 _print(gw.fit_confidence(args.user, save=args.action == "fit"))

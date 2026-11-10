@@ -67,6 +67,18 @@ def _no_extra(d: dict, allowed: set[str], what: str):
         raise ValidationError(f"{what} has unknown fields: {sorted(extra)}")
 
 
+def _standing(s) -> dict | None:
+    if s is None:
+        return None
+    _no_extra(s, {"item", "product_id", "max_unit_price", "min_interval_days"}, "standing")
+    out = {"item": _string(s, "item", required=True),
+           "max_unit_price": _number(s, "max_unit_price", lo=0, required=True),
+           "min_interval_days": int(_number(s, "min_interval_days", lo=0, default=0))}
+    if s.get("product_id"):
+        out["product_id"] = _product_id(s)
+    return out
+
+
 def _product_id(d: dict) -> str | None:
     from .products import normalize
     raw = _string(d, "product_id")
@@ -99,6 +111,7 @@ class Profile:
     explanation_style: str = "plain"
     hard_rules: list[str] = field(default_factory=list)
     min_confidence: float = 0.35  # below this purchase confidence, ask the user (confidence.py)
+    auto_accept_kept: bool = True  # verified purchases kept past the return window count as accepted
 
     @classmethod
     def from_dict(cls, d: dict) -> "Profile":
@@ -113,6 +126,7 @@ class Profile:
                                       choices={"plain", "brief_technical", "detailed"}),
             hard_rules=_strings(d, "hard_rules", choices=HARD_RULES),
             min_confidence=_number(d, "min_confidence", default=0.35, lo=0, hi=1),
+            auto_accept_kept=_bool(d, "auto_accept_kept", default=True),
         )
 
     def to_dict(self) -> dict:
@@ -137,10 +151,12 @@ class Mandate:
     ship_to: str = "self"
     recipient: dict[str, Any] | None = None
     benchmark_price: float | None = None
+    standing: dict[str, Any] | None = None   # pre-approved repeat purchase, see reorder.py
+    requires_returnable: bool = False        # escalate when the merchant's return policy is unknown
 
     FIELDS = {"id", "user_id", "intent", "task_type", "mode", "budget", "allowed_categories",
               "blocked_merchants", "deadline", "approval", "secrecy", "ship_to", "recipient",
-              "benchmark_price"}
+              "benchmark_price", "standing", "requires_returnable"}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Mandate":
@@ -179,6 +195,8 @@ class Mandate:
             ship_to=_string(d, "ship_to", default="self", choices={"self", "recipient"}),
             recipient=recipient,
             benchmark_price=_number(d, "benchmark_price", lo=0),
+            standing=_standing(d.get("standing")),
+            requires_returnable=_bool(d, "requires_returnable"),
         )
 
     def to_dict(self) -> dict:
@@ -198,6 +216,10 @@ class Mandate:
             out["recipient"] = self.recipient
         if self.benchmark_price is not None:
             out["benchmark_price"] = self.benchmark_price
+        if self.standing is not None:
+            out["standing"] = self.standing
+        if self.requires_returnable:
+            out["requires_returnable"] = True
         return out
 
 

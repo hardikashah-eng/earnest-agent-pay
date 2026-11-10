@@ -60,6 +60,10 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 - Per-user confidence weights learned from verdicts, shrunk to defaults, kept only when they beat defaults on held-out data, with a calibration report.
 - Market price quotes (connector / CSV / agent), cheaper-elsewhere and wait suggestions. Next: a price-tracker connector (e.g. Keepa for Amazon).
 
+## User features (v0.3) — done
+
+- Reorder prediction and standing mandates; follow-ups (verdicts, delivery, price drops, renewals) with auto-accept of kept purchases; return checker (policy data, pre-purchase signal, deadlines); households (allowances, monthly budget, two-adult approvals); dispute evidence packs.
+
 ## Next (v0.2+)
 
 - Plain language to mandate: an LLM turns "find a surprise gift for my brother, into hiking, under $80" into a structured mandate.

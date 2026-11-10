@@ -135,6 +135,20 @@ export EARNEST_APPROVAL_URL=https://earnest.my-tunnel.example
 python -m earnest serve
 ```
 
+## After the purchase, and for the whole household
+
+```bash
+python -m earnest reorder list --user user_demo --within 14          # what you'll run out of soon
+python -m earnest reorder standing "AA batteries 24 pack" --max-price 20 --every-days 60 --user user_demo
+python -m earnest followup --user user_demo    # verdicts due, deliveries, price drops, renewals, returns
+python -m earnest returns --user user_demo     # rejected items you can still return, windows closing
+python -m earnest dispute <request_id> --out disputes/   # evidence pack for a chargeback
+python -m earnest household set examples/households/family.json      # allowances, budget, two-adult rule
+python -m earnest approve <request_id> --as user_partner
+```
+
+Standing mandates let an agent restock without asking, only for that item, at or under that price, and not more often than the interval. Purchases verified and kept past the return window count as accepted automatically, so trust grows without you reporting every good outcome.
+
 ## Spending insights
 
 Import your card statements and get the **top 5 things worth knowing each month**: fees you could avoid, prices that crept up, overlapping subscriptions, cheaper stores you already use, delivery habits and unusual spikes. Everything stays in your local SQLite file.
