@@ -20,3 +20,6 @@ earnest = "earnest.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["earnest*"]
+
+[tool.setuptools.package-data]
+earnest = ["data/*.json"]

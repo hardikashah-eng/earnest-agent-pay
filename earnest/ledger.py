@@ -1,10 +1,12 @@
-"""SQLite ledger: profiles, mandates, requests, outcomes, trust scores and score events."""
+"""SQLite ledger: profiles, mandates, requests, outcomes, trust scores, score events and the
+user's own trusted/untrusted merchant lists."""
 from __future__ import annotations
 
 import json
 import sqlite3
 from datetime import datetime
 
+from .merchants import merchant_keys
 from .models import Mandate, Outcome, Profile, SpendRequest
 from .scoring import decay
 
@@ -25,6 +27,10 @@ CREATE TABLE IF NOT EXISTS trust (
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, agent_id TEXT NOT NULL,
     task_type TEXT NOT NULL, kind TEXT NOT NULL, points REAL NOT NULL, request_id TEXT, at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS merchant_lists (
+    user_id TEXT NOT NULL, key TEXT NOT NULL, merchant TEXT NOT NULL, status TEXT NOT NULL,
+    reason TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (user_id, key)
 );
 """
 
@@ -98,6 +104,54 @@ class Ledger:
             "SELECT 1 FROM requests WHERE user_id = ? AND merchant = ? AND status = 'approved' LIMIT 1",
             (user_id, merchant)).fetchone()
         return row is not None
+
+    def purchases(self, user_id: str) -> list[dict]:
+        """Approved requests with the user's verdict (if reported), oldest first."""
+        rows = self.db.execute(
+            "SELECT r.merchant, r.amount, r.data, r.created_at, o.data AS outcome FROM requests r "
+            "LEFT JOIN outcomes o ON o.request_id = r.id "
+            "WHERE r.user_id = ? AND r.status = 'approved' ORDER BY r.created_at", (user_id,))
+        out = []
+        for r in rows:
+            out.append({"merchant": r["merchant"], "amount": r["amount"], "at": r["created_at"],
+                        "item": json.loads(r["data"]).get("item"),
+                        "verdict": json.loads(r["outcome"])["verdict"] if r["outcome"] else None})
+        return out
+
+    def statement_purchases(self, user_id: str) -> list[dict]:
+        """Spending from imported card statements, if any were imported (see earnest.insights)."""
+        has = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transactions'").fetchone()
+        if not has:
+            return []
+        return [dict(r) for r in self.db.execute(
+            "SELECT merchant, amount, date FROM transactions WHERE user_id = ? ORDER BY date", (user_id,))]
+
+    # --- the user's merchant lists ---
+    def set_merchant_status(self, user_id: str, merchant: str, status: str, reason: str, at: datetime) -> None:
+        if status not in ("trusted", "untrusted"):
+            raise ValueError("status must be trusted or untrusted")
+        with self.db:
+            for k in merchant_keys(merchant):
+                self.db.execute("INSERT OR REPLACE INTO merchant_lists VALUES (?, ?, ?, ?, ?, ?)",
+                                (user_id, k, merchant, status, reason, at.isoformat()))
+
+    def forget_merchant(self, user_id: str, merchant: str) -> int:
+        with self.db:
+            n = 0
+            for k in merchant_keys(merchant):
+                n += self.db.execute("DELETE FROM merchant_lists WHERE user_id = ? AND key = ?",
+                                     (user_id, k)).rowcount
+        return n
+
+    def merchant_overrides(self, user_id: str) -> dict[str, tuple[str, str]]:
+        return {r["key"]: (r["status"], r["reason"]) for r in self.db.execute(
+            "SELECT key, status, reason FROM merchant_lists WHERE user_id = ?", (user_id,))}
+
+    def merchant_lists(self, user_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT DISTINCT merchant, status, reason, at FROM merchant_lists WHERE user_id = ? "
+            "ORDER BY status, merchant", (user_id,))]
 
     # --- outcomes ---
     def add_outcome(self, o: Outcome, at: datetime) -> None:

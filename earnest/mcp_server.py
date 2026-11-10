@@ -40,18 +40,33 @@ def get_limits(task_type: str) -> dict:
 
 
 @mcp.tool()
+def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category: str = "") -> dict:
+    """Check a merchant before you buy. Returns its trust status (verified, user_trusted,
+    unknown, suspicious or untrusted), whether the user has bought here before (and the same
+    or a similar item), and an overall confidence level. Untrusted merchants and lookalikes
+    of well-known stores are denied; buying from them costs trust. Prefer verified merchants
+    and ones the user already buys from."""
+    return _gateway.check_merchant(USER_ID, merchant, item or None, amount, category or None)
+
+
+@mcp.tool()
 def request_spend(mandate_id: str, amount: float, merchant: str, category: str, reason: str,
-                  recurring: bool = False, international: bool = False, ask_first: bool = False) -> dict:
+                  item: str = "", recurring: bool = False, international: bool = False,
+                  ask_first: bool = False) -> dict:
     """Ask to spend money for a mandate. Returns approved (with a scoped, expiring card),
-    escalated (waiting for the user) or denied. Set ask_first=true when you're unsure:
-    asking before acting is rewarded when it was needed. Spending outside the mandate is
-    penalized heavily."""
+    escalated (waiting for the user) or denied, plus a confidence block. Name the `item` you
+    are buying so the gateway can match it against the user's past purchases. Set
+    ask_first=true when you're unsure: asking before acting is rewarded when it was needed.
+    Spending outside the mandate, or at an untrusted merchant, is penalized heavily."""
     try:
-        return _gateway.request_spend({
+        payload = {
             "agent_id": AGENT_ID, "mandate_id": mandate_id, "amount": amount, "merchant": merchant,
             "category": category, "reason": reason, "recurring": recurring,
             "international": international, "ask_first": ask_first,
-        }).to_dict()
+        }
+        if item:
+            payload["item"] = item
+        return _gateway.request_spend(payload).to_dict()
     except ValidationError as e:
         return {"status": "invalid", "error": str(e)}
 

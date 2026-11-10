@@ -1,0 +1,66 @@
+{
+  "version": "2026-11-10",
+  "description": "Default merchant trust lists for the earnest gateway. Users add their own entries on top (`earnest merchant trust|distrust`), and those always win. See spec/SPEC.md section 3a.",
+
+  "verified": [
+    { "id": "amazon", "name": "Amazon", "domains": ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.in", "amzn.com", "amzn.to"], "aliases": ["Amazon Marketplace", "AMZN", "AMZN Mktp", "Amazon.com"], "categories": ["shopping", "electronics", "household", "books"] },
+    { "id": "walmart", "name": "Walmart", "domains": ["walmart.com", "walmart.ca"], "aliases": ["WM Supercenter", "Walmart.com"], "categories": ["shopping", "groceries", "household"] },
+    { "id": "apple", "name": "Apple", "domains": ["apple.com"], "aliases": ["Apple Store", "Apple.com/bill"], "categories": ["electronics", "software"] },
+    { "id": "ebay", "name": "eBay", "domains": ["ebay.com", "ebay.co.uk", "ebay.ca"], "aliases": [], "categories": ["shopping", "marketplace"] },
+    { "id": "target", "name": "Target", "domains": ["target.com"], "aliases": ["Target.com"], "categories": ["shopping", "household"] },
+    { "id": "costco", "name": "Costco", "domains": ["costco.com", "costco.ca"], "aliases": ["Costco Wholesale"], "categories": ["shopping", "groceries"] },
+    { "id": "homedepot", "name": "The Home Depot", "domains": ["homedepot.com"], "aliases": ["Home Depot"], "categories": ["home_improvement"] },
+    { "id": "lowes", "name": "Lowe's", "domains": ["lowes.com"], "aliases": ["Lowes"], "categories": ["home_improvement"] },
+    { "id": "bestbuy", "name": "Best Buy", "domains": ["bestbuy.com", "bestbuy.ca"], "aliases": [], "categories": ["electronics"] },
+    { "id": "wayfair", "name": "Wayfair", "domains": ["wayfair.com"], "aliases": [], "categories": ["furniture", "household"] },
+    { "id": "chewy", "name": "Chewy", "domains": ["chewy.com"], "aliases": [], "categories": ["pets"] },
+    { "id": "etsy", "name": "Etsy", "domains": ["etsy.com"], "aliases": [], "categories": ["marketplace", "gifts"] },
+    { "id": "kroger", "name": "Kroger", "domains": ["kroger.com"], "aliases": [], "categories": ["groceries"] },
+    { "id": "macys", "name": "Macy's", "domains": ["macys.com"], "aliases": ["Macys"], "categories": ["apparel", "gifts"] },
+    { "id": "nordstrom", "name": "Nordstrom", "domains": ["nordstrom.com", "nordstromrack.com"], "aliases": ["Nordstrom Rack"], "categories": ["apparel"] },
+    { "id": "kohls", "name": "Kohl's", "domains": ["kohls.com"], "aliases": ["Kohls"], "categories": ["apparel", "household"] },
+    { "id": "nike", "name": "Nike", "domains": ["nike.com"], "aliases": [], "categories": ["apparel"] },
+    { "id": "samsclub", "name": "Sam's Club", "domains": ["samsclub.com"], "aliases": ["Sams Club"], "categories": ["shopping", "groceries"] },
+    { "id": "ikea", "name": "IKEA", "domains": ["ikea.com"], "aliases": [], "categories": ["furniture"] },
+    { "id": "newegg", "name": "Newegg", "domains": ["newegg.com"], "aliases": [], "categories": ["electronics"] },
+    { "id": "bhphoto", "name": "B&H Photo Video", "domains": ["bhphotovideo.com"], "aliases": ["B&H Photo", "B and H Photo"], "categories": ["electronics"] },
+    { "id": "sephora", "name": "Sephora", "domains": ["sephora.com"], "aliases": [], "categories": ["beauty"] },
+    { "id": "ulta", "name": "Ulta Beauty", "domains": ["ulta.com"], "aliases": ["Ulta"], "categories": ["beauty"] },
+    { "id": "dell", "name": "Dell", "domains": ["dell.com"], "aliases": ["Dell Technologies"], "categories": ["electronics"] },
+    { "id": "microsoft", "name": "Microsoft", "domains": ["microsoft.com", "xbox.com"], "aliases": ["Microsoft Store", "Xbox"], "categories": ["software", "electronics"] },
+    { "id": "samsung", "name": "Samsung", "domains": ["samsung.com"], "aliases": [], "categories": ["electronics"] },
+    { "id": "lego", "name": "LEGO", "domains": ["lego.com"], "aliases": [], "categories": ["toys", "gifts"] },
+    { "id": "rei", "name": "REI", "domains": ["rei.com"], "aliases": ["REI Co-op"], "categories": ["outdoor", "apparel"] },
+    { "id": "staples", "name": "Staples", "domains": ["staples.com"], "aliases": [], "categories": ["office"] },
+    { "id": "officedepot", "name": "Office Depot", "domains": ["officedepot.com"], "aliases": ["OfficeMax"], "categories": ["office"] },
+    { "id": "petco", "name": "Petco", "domains": ["petco.com"], "aliases": [], "categories": ["pets"] },
+    { "id": "petsmart", "name": "PetSmart", "domains": ["petsmart.com"], "aliases": [], "categories": ["pets"] },
+    { "id": "cvs", "name": "CVS", "domains": ["cvs.com"], "aliases": ["CVS Pharmacy"], "categories": ["pharmacy", "household"] },
+    { "id": "walgreens", "name": "Walgreens", "domains": ["walgreens.com"], "aliases": [], "categories": ["pharmacy", "household"] },
+    { "id": "instacart", "name": "Instacart", "domains": ["instacart.com"], "aliases": [], "categories": ["groceries", "delivery"] },
+    { "id": "github", "name": "GitHub", "domains": ["github.com"], "aliases": [], "categories": ["software"] },
+    { "id": "jetbrains", "name": "JetBrains", "domains": ["jetbrains.com"], "aliases": [], "categories": ["software"] },
+    { "id": "adobe", "name": "Adobe", "domains": ["adobe.com"], "aliases": [], "categories": ["software"] }
+  ],
+
+  "untrusted": {
+    "_comment": "Named entries go in `entities` (domain or name, with a reason and source). The default list ships no named third parties: scam domains churn daily, so load a current feed with `earnest merchant import-blocklist` (one domain per line, e.g. from a PhishTank/URLhaus export or your bank's fraud alerts) or add entries with `earnest merchant distrust`. The rules below catch the common patterns without a feed.",
+    "entities": [],
+
+    "lookalikes": {
+      "_comment": "A merchant that imitates a verified one is denied. Checked against every verified domain.",
+      "homoglyphs": { "0": "o", "1": "l", "3": "e", "5": "s", "rn": "m", "vv": "w" },
+      "max_edit_distance": 1,
+      "edit_distance_min_length": 6,
+      "brand_in_domain_min_length": 4
+    },
+
+    "suspicious_tlds": ["zip", "mov", "top", "xyz", "click", "buzz", "gq", "tk", "ml", "cf", "ga", "country", "kim", "work", "rest", "cam"],
+    "suspicious_keywords": ["login", "signin", "verify", "verification", "secure", "account", "update", "wallet", "recover", "refund", "giftcard", "giftcards", "free", "prize", "winner", "claim", "bonus", "airdrop", "generator", "unlock"],
+
+    "high_risk_categories": {
+      "_comment": "Payment rails scammers ask for because they are hard to reverse (FTC guidance). Allowed, but the user always looks first.",
+      "values": ["gift_card", "gift_cards", "giftcard", "giftcards", "crypto", "cryptocurrency", "wire_transfer", "money_transfer", "prepaid_card", "prepaid_cards", "money_order"]
+    }
+  }
+}

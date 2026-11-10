@@ -34,6 +34,14 @@ All items below shipped in v0.1. One change from the plan: outcomes are reported
 
 Next for insights: receipt / order import for item-level advice ("buy X at Y instead"), a real bank-aggregator connector, learning the profile (`price_sensitivity`, store loyalty) from spending, and using real spend as fair-price benchmarks for agent scoring.
 
+## Merchant trust (v0.2) — done
+
+- Default known-good list of top e-commerce merchants; lookalike, suspicious-domain and high-risk-category detection; user trusted / untrusted lists and blocklist import.
+- Purchase history (earnest purchases + imported statements) as a confidence signal, with same / similar item matching.
+- `check_merchant` MCP tool; `confidence` on every decision.
+
+Next: a maintained blocklist feed connector, item data from receipts for statement purchases, and per-category verified lists outside the US.
+
 ## Next (v0.2+)
 
 - `stripe_issuing` backend in test mode: single-use capped virtual cards, real-time authorization webhook enforcing the mandate.
