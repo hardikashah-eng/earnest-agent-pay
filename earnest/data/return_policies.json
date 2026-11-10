@@ -1,0 +1,13 @@
+{
+  "checked": "2026-11",
+  "_comment": "Standard (non-holiday) return windows in days from purchase, by verified merchant id. Policies change and have exceptions (final sale, activatable devices, marketplace sellers): the return checker treats these as guidance and always tells the user to confirm on the merchant's site. 'open_ended' means no fixed window for most items. Holiday extensions are not modeled.",
+  "policies": {
+    "amazon":  { "days": 30, "notes": "Most items; marketplace sellers mostly follow Amazon's policy." },
+    "walmart": { "days": 90, "categories": { "electronics": 30 }, "notes": "Marketplace sellers usually 30 days." },
+    "target":  { "days": 90, "categories": { "electronics": 30 }, "member_extra_days": { "circle card": 30, "circle 360": 30, "redcard": 30 }, "notes": "Target-owned brands up to a year." },
+    "bestbuy": { "days": 15, "member_days": { "plus": 60, "total": 60 }, "notes": "Activatable devices 14 days; restocking fees on some items." },
+    "costco":  { "open_ended": true, "categories": { "electronics": 90 }, "notes": "Most items have no fixed window." },
+    "apple":   { "days": 14 }
+  },
+  "electronics_categories": ["electronics", "computers", "phones", "tv", "audio", "cameras", "gaming"]
+}

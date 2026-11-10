@@ -40,15 +40,17 @@ def _unb64(s: str) -> bytes:
 
 
 def make_token(secret: bytes, request_id: str, action: str, now: float | None = None,
-               ttl: int = TOKEN_TTL_S) -> str:
-    payload = json.dumps({"r": request_id, "a": action, "e": int((now or time.time()) + ttl)},
-                         separators=(",", ":")).encode()
+               ttl: int = TOKEN_TTL_S, approver: str | None = None) -> str:
+    data = {"r": request_id, "a": action, "e": int((now or time.time()) + ttl)}
+    if approver:
+        data["u"] = approver
+    payload = json.dumps(data, separators=(",", ":")).encode()
     sig = hmac.new(secret, payload, hashlib.sha256).digest()
     return f"{_b64(payload)}.{_b64(sig)}"
 
 
-def read_token(secret: bytes, token: str, now: float | None = None) -> tuple[str, str]:
-    """(request_id, action) or ValueError."""
+def read_token(secret: bytes, token: str, now: float | None = None, with_approver: bool = False):
+    """(request_id, action), or (request_id, action, approver) with with_approver; ValueError if invalid."""
     try:
         p, s = token.split(".", 1)
         payload, sig = _unb64(p), _unb64(s)
@@ -61,7 +63,7 @@ def read_token(secret: bytes, token: str, now: float | None = None) -> tuple[str
         raise ValueError("link expired")
     if data["a"] not in ("approve", "deny"):
         raise ValueError("unknown action")
-    return data["r"], data["a"]
+    return (data["r"], data["a"], data.get("u")) if with_approver else (data["r"], data["a"])
 
 
 # ------------------------------------------------------------------ messages
@@ -79,6 +81,7 @@ class ApprovalMessage:
     approve_url: str
     deny_url: str
     currency: str = "USD"
+    approver: str | None = None      # household member this copy of the message is for
 
     @property
     def title(self) -> str:

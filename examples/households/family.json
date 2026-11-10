@@ -1,0 +1,11 @@
+{
+  "id": "hh_family",
+  "name": "The family",
+  "monthly_budget": 1500,
+  "second_approval_over": 300,
+  "members": [
+    { "user_id": "user_demo", "role": "adult" },
+    { "user_id": "user_partner", "role": "adult" },
+    { "user_id": "user_kid", "role": "child", "monthly_allowance": 40 }
+  ]
+}
