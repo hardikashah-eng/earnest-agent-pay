@@ -23,6 +23,40 @@
         "single_use": { "type": "boolean" },
         "backend": { "type": "string" }
       }
+    },
+    "confidence": {
+      "type": "object",
+      "description": "Merchant trust and purchase-history signals (SPEC.md sections 3a, 3b). Informational; the decision is in status and reasons.",
+      "required": ["level", "score", "merchant", "history", "signals"],
+      "properties": {
+        "level": { "type": "string", "enum": ["low", "medium", "high"] },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "merchant": {
+          "type": "object",
+          "required": ["merchant", "status", "reasons"],
+          "properties": {
+            "merchant": { "type": "string" },
+            "status": { "type": "string", "enum": ["verified", "user_trusted", "unknown", "suspicious", "untrusted"] },
+            "merchant_id": { "type": "string" },
+            "name": { "type": "string" },
+            "reasons": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "history": {
+          "type": "object",
+          "properties": {
+            "merchant_purchases": { "type": "integer" },
+            "from_statements": { "type": "integer" },
+            "same_item": { "type": "integer" },
+            "similar_item": { "type": "integer" },
+            "rejected_before": { "type": "integer" },
+            "last_purchase": { "type": "string", "format": "date" },
+            "typical_amount": { "type": "number" },
+            "item_typical_amount": { "type": "number" }
+          }
+        },
+        "signals": { "type": "array", "items": { "type": "string" } }
+      }
     }
   }
 }

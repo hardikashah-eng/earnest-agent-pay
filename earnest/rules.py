@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from .history import History
+from .merchants import MerchantCheck
 from .models import Mandate, Profile, SpendRequest
 from .tiers import Tier
 
@@ -17,13 +19,17 @@ class Verdict:
 
 
 def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: Tier,
-                   spent: float, is_new_merchant: bool, now: datetime) -> Verdict:
+                   spent: float, is_new_merchant: bool, now: datetime,
+                   merchant: MerchantCheck | None, history: History | None,
+                   high_risk_category: bool) -> Verdict:
     # --- Deny: these are violations of what the user said ---
     deny: list[str] = []
     if mandate.deadline is not None and now.date() > mandate.deadline:
         deny.append("mandate_expired")
     if req.merchant in mandate.blocked_merchants:
         deny.append("merchant_blocked")
+    if merchant is not None and merchant.status == "untrusted":
+        deny.extend(merchant.reasons)
     if mandate.allowed_categories and req.category not in mandate.allowed_categories:
         deny.append("category_not_allowed")
     if spent + req.amount > mandate.budget_max + 1e-9:
@@ -47,7 +53,14 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
         esc.append("above_tier_cap")
     elif req.amount > tier.effective_approval_over(profile.autonomy):
         esc.append("above_approval_threshold")
-    if is_new_merchant and not (tier.approve_new_merchants or profile.novelty >= 0.8):
+    if merchant is not None and merchant.status == "suspicious":
+        esc.extend(merchant.reasons)
+    if high_risk_category:
+        esc.append(f"high_risk_category:{req.category}")
+    if history is not None and history.rejected_before:
+        esc.append("previous_purchase_rejected")
+    merchant_vetted = merchant is not None and merchant.trusted
+    if is_new_merchant and not (merchant_vetted or tier.approve_new_merchants or profile.novelty >= 0.8):
         esc.append("new_merchant")
     if esc:
         return Verdict("escalated", esc)
@@ -56,8 +69,11 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
 
 
 def decide(req: SpendRequest, mandate: Mandate, profile: Profile, tier: Tier,
-           spent: float, is_new_merchant: bool, now: datetime) -> Verdict:
-    base = _base_decision(req, mandate, profile, tier, spent, is_new_merchant, now)
+           spent: float, is_new_merchant: bool, now: datetime,
+           merchant: MerchantCheck | None = None, history: History | None = None,
+           high_risk_category: bool = False) -> Verdict:
+    base = _base_decision(req, mandate, profile, tier, spent, is_new_merchant, now,
+                          merchant, history, high_risk_category)
     if not req.ask_first:
         return base
     # The agent asked before acting. Reward it only if asking was actually needed.

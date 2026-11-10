@@ -7,6 +7,8 @@
     python -m earnest approve req_123
     python -m earnest outcome req_123 accepted
     python -m earnest limits --user user_demo --agent agent_shopper --task software
+    python -m earnest merchant check amazon.com --user user_demo --item "usb-c cable"
+    python -m earnest merchant distrust sketchy-deals.shop --user user_demo
     python -m earnest demo
 """
 from __future__ import annotations
@@ -66,6 +68,33 @@ def _insights_cmd(args, gw: Gateway) -> int:
     return 0
 
 
+def _merchant_cmd(args, gw: Gateway) -> int:
+    if args.action == "check":
+        _print(gw.check_merchant(args.user, args.merchant, args.item, args.amount or 0.0, args.category))
+    elif args.action == "trust":
+        gw.trust_merchant(args.user, args.merchant, args.reason or "user")
+        print(f"trusted {args.merchant}")
+    elif args.action == "distrust":
+        gw.distrust_merchant(args.user, args.merchant, args.reason or "user")
+        print(f"untrusted {args.merchant}")
+    elif args.action == "forget":
+        n = gw.ledger.forget_merchant(args.user, args.merchant)
+        print(f"removed {args.merchant} from your lists" if n else f"{args.merchant} wasn't on your lists")
+    elif args.action == "list":
+        _print({"yours": gw.ledger.merchant_lists(args.user),
+                "verified_defaults": [m.name for m in gw.merchants.verified],
+                "defaults_version": gw.merchants.version})
+    elif args.action == "import-blocklist":
+        added = 0
+        for line in Path(args.merchant).read_text(encoding="utf-8").splitlines():
+            entry = line.split("#", 1)[0].strip()
+            if entry:
+                gw.distrust_merchant(args.user, entry, args.reason or f"blocklist:{Path(args.merchant).name}")
+                added += 1
+        print(f"added {added} untrusted merchants from {args.merchant}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="earnest", description="Agents earn spending limits by behaving well.")
     ap.add_argument("--db", default="earnest.db", help="SQLite ledger file (default: earnest.db)")
@@ -90,6 +119,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("events", help="show score history")
     p.add_argument("--user", required=True)
     p.add_argument("--agent")
+    p = sub.add_parser("merchant", help="check a merchant, or manage your trusted / untrusted lists")
+    p.add_argument("action", choices=["check", "trust", "distrust", "forget", "list", "import-blocklist"])
+    p.add_argument("merchant", nargs="?", help="domain or name (a file path for import-blocklist)")
+    p.add_argument("--user", required=True)
+    p.add_argument("--item", help="for check: the item, to match against past purchases")
+    p.add_argument("--amount", type=float)
+    p.add_argument("--category")
+    p.add_argument("--reason")
     p = sub.add_parser("demo", help="run the two-agent simulation and write a chart")
     p.add_argument("--out", default="demo/limits.svg")
     p.add_argument("--days", type=int, default=40)
@@ -140,6 +177,10 @@ def main(argv: list[str] | None = None) -> int:
             _print(gw.report_outcome(outcome))
         elif args.cmd == "limits":
             _print(gw.limits(args.user, args.agent, args.task))
+        elif args.cmd == "merchant":
+            if args.action != "list" and not args.merchant:
+                ap.error(f"merchant {args.action} needs a merchant")
+            return _merchant_cmd(args, gw)
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
         elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):

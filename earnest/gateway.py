@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Callable
 
 from .backends.mock import MockBackend
+from .history import PastPurchase, confidence, summarize
 from .ledger import Ledger
+from .merchants import MerchantRegistry
 from .models import Decision, Mandate, Outcome, Profile, SpendRequest, ValidationError
 from .rules import decide
 from .scoring import ASKED_FIRST, PURCHASE_APPROVED, VIOLATION, outcome_events
@@ -20,11 +22,13 @@ def utcnow() -> datetime:
 
 class Gateway:
     def __init__(self, ledger: Ledger | None = None, backend=None,
-                 clock: Callable[[], datetime] = utcnow, tiers: tuple[Tier, ...] = DEFAULT_TIERS):
+                 clock: Callable[[], datetime] = utcnow, tiers: tuple[Tier, ...] = DEFAULT_TIERS,
+                 merchants: MerchantRegistry | None = None):
         self.ledger = ledger or Ledger()
         self.backend = backend or MockBackend()
         self.clock = clock
         self.tiers = tiers
+        self.merchants = merchants or MerchantRegistry.default()
 
     # --- setup (user side) ---
     def set_profile(self, profile: Profile | dict) -> Profile:
@@ -57,6 +61,41 @@ class Gateway:
             "new_merchants_ok": t.approve_new_merchants or p.novelty >= 0.8,
         }
 
+    # --- merchant trust & purchase history ---
+    def trust_merchant(self, user_id: str, merchant: str, reason: str = "user") -> None:
+        self.ledger.set_merchant_status(user_id, merchant, "trusted", reason, self.clock())
+
+    def distrust_merchant(self, user_id: str, merchant: str, reason: str = "user") -> None:
+        self.ledger.set_merchant_status(user_id, merchant, "untrusted", reason, self.clock())
+
+    def _past_purchases(self, user_id: str) -> list[PastPurchase]:
+        past = []
+        for p in self.ledger.purchases(user_id):
+            past.append(PastPurchase(frozenset(self.merchants.canonical(p["merchant"])), p["amount"],
+                                     datetime.fromisoformat(p["at"]).date(), "earnest", p["item"], p["verdict"]))
+        for t in self.ledger.statement_purchases(user_id):
+            past.append(PastPurchase(frozenset(self.merchants.canonical(t["merchant"])), t["amount"],
+                                     date.fromisoformat(t["date"]), "statement"))
+        return past
+
+    def assess_merchant(self, user_id: str, merchant: str, item: str | None = None,
+                        amount: float = 0.0, category: str | None = None):
+        """(MerchantCheck, History, has_bought_here, confidence dict) for a prospective purchase."""
+        check = self.merchants.check(merchant, self.ledger.merchant_overrides(user_id))
+        keys = self.merchants.canonical(merchant)
+        past = self._past_purchases(user_id)
+        hist = summarize(keys, past, item, amount)
+        bought_here = any(keys & p.merchant_keys for p in past)
+        conf = confidence(check, hist)
+        if category and self.merchants.high_risk_category(category):
+            conf["signals"].append(f"high_risk_category:{category}")
+        return check, hist, bought_here, conf
+
+    def check_merchant(self, user_id: str, merchant: str, item: str | None = None,
+                       amount: float = 0.0, category: str | None = None) -> dict:
+        """What an agent should know before buying: trust status, history, confidence."""
+        return self.assess_merchant(user_id, merchant, item, amount, category)[3]
+
     # --- agent side ---
     def request_spend(self, request: SpendRequest | dict) -> Decision:
         req = request if isinstance(request, SpendRequest) else SpendRequest.from_dict(request)
@@ -72,13 +111,17 @@ class Gateway:
 
         profile = self.profile(mandate.user_id)
         score, t = self.tier(mandate.user_id, req.agent_id, mandate.task_type)
+        check, hist, bought_here, conf = self.assess_merchant(
+            mandate.user_id, req.merchant, req.item, req.amount, req.category)
         verdict = decide(
             req, mandate, profile, t,
             spent=self.ledger.spent_on_mandate(mandate.id),
-            is_new_merchant=not self.ledger.known_merchant(mandate.user_id, req.merchant),
+            is_new_merchant=not bought_here,
             now=now,
+            merchant=check, history=hist,
+            high_risk_category=self.merchants.high_risk_category(req.category),
         )
-        decision = Decision(request_id, verdict.status, verdict.reasons, t.name)
+        decision = Decision(request_id, verdict.status, verdict.reasons, t.name, confidence=conf)
         if verdict.status == "approved":
             decision.credential = self._issue(req, mandate, profile, t, now)
 
@@ -99,7 +142,9 @@ class Gateway:
         return [{"request_id": r["id"], "agent_id": r["agent_id"], "mandate_id": r["mandate_id"],
                  "merchant": r["merchant"], "amount": r["amount"],
                  "reasons": json.loads(r["decision"])["reasons"],
-                 "reason_given": json.loads(r["data"])["reason"]}
+                 "reason_given": json.loads(r["data"])["reason"],
+                 "item": json.loads(r["data"]).get("item"),
+                 "confidence": json.loads(r["decision"]).get("confidence")}
                 for r in self.ledger.pending(user_id)]
 
     def resolve(self, request_id: str, approve: bool) -> Decision:
@@ -116,13 +161,15 @@ class Gateway:
         prior = json.loads(row["decision"])["reasons"]
 
         if not approve:
-            decision = Decision(request_id, "denied", [*prior, "user_denied"], t.name)
+            decision = Decision(request_id, "denied", [*prior, "user_denied"], t.name,
+                                confidence=json.loads(row["decision"]).get("confidence"))
             self.ledger.update_request(request_id, "denied", decision.to_dict())
             return decision
 
         profile = self.profile(mandate.user_id)
         decision = Decision(request_id, "approved", [*prior, "user_approved"], t.name,
-                            self._issue(req, mandate, profile, t, now))
+                            self._issue(req, mandate, profile, t, now),
+                            json.loads(row["decision"]).get("confidence"))
         self.ledger.update_request(request_id, "approved", decision.to_dict())
         self.ledger.add_points(mandate.user_id, req.agent_id, mandate.task_type,
                                "purchase_approved", PURCHASE_APPROVED, request_id, now)

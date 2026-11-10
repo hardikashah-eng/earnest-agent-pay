@@ -10,7 +10,7 @@ The spec defines five objects and one decision procedure. The schemas in this fo
 | Decision | [decision.schema.json](decision.schema.json) | the gateway |
 | Outcome | [outcome.schema.json](outcome.schema.json) | the user, never the agent |
 
-Trust tiers are configuration: [trust_tiers.json](trust_tiers.json).
+Trust tiers are configuration: [trust_tiers.json](trust_tiers.json). Default merchant trust lists are data: [earnest/data/merchant_trust.json](../earnest/data/merchant_trust.json).
 
 ## 1. Trust is keyed per (user, agent, task type)
 
@@ -37,7 +37,7 @@ Checks run in this order. The first group **denies** the request and counts as a
 
 **Deny (violation)**
 1. The mandate's `deadline` has passed.
-2. The merchant is in `blocked_merchants`.
+2. The merchant is in `blocked_merchants`, or is **untrusted** (section 3a): on the user's untrusted list, on the default blocklist, or a lookalike of a verified merchant.
 3. `allowed_categories` is set and the category isn't in it.
 4. Spent so far on the mandate + `amount` > `budget.max`.
 5. A profile `hard_rule` is broken (`no_subscriptions` with `recurring`, `no_international` with `international`, `no_new_merchants` with a merchant the user has never bought from).
@@ -47,11 +47,48 @@ Checks run in this order. The first group **denies** the request and counts as a
 7. Mandate `approval` is `always` or `shortlist`.
 8. `amount` > tier cap.
 9. `amount` > effective approval threshold.
-10. Merchant is new to this user and the tier doesn't allow new merchants (profile `novelty` ≥ 0.8 also allows them).
+10. The merchant is **suspicious** (section 3a): a verified brand on a domain we don't list, a frequently abused TLD, or a phishing-style word in the domain.
+11. The category is a **high-risk payment rail** (gift cards, crypto, wire or money transfers, prepaid cards, money orders): hard to reverse, and what scammers ask for.
+12. The user **rejected or disputed** the same or a similar item from this merchant before (section 3b).
+13. Merchant is new to this user and the tier doesn't allow new merchants (profile `novelty` ≥ 0.8 also allows them). A merchant counts as known if the user has bought there through earnest **or** it appears in their imported card statements. Verified and user-trusted merchants skip this check, but the `no_new_merchants` hard rule still applies to them.
 
 **Approve** otherwise: the backend issues a credential capped at `amount`, locked to the merchant, expiring after the tier's lifetime. It's single-use if the tier says so or if profile `privacy` ≥ 0.8.
 
 Unknown mandates are denied without touching any score.
+
+Every decision carries a `confidence` block (low / medium / high, plus the merchant status, history counts and signals) so the agent and the user can see why. It's informational: `status` and `reasons` are the decision.
+
+### 3a. Merchant trust
+
+Each merchant is classified before any history is considered. Merchants are matched however they're written (`amazon.com`, `https://www.amazon.com/dp/…`, `Amazon`, `AMZN Mktp` from a statement), and subdomains of a listed domain count as that merchant. First match wins:
+
+| Status | From | Effect |
+|---|---|---|
+| `untrusted` | the user's own untrusted list | deny (violation) |
+| `user_trusted` | the user's own trusted list | like verified |
+| `verified` | the default known-good list (top e-commerce merchants with their domains and aliases) | skips the new-merchant escalation |
+| `untrusted` | the default blocklist (`untrusted.entities`), or a **lookalike** of a verified merchant: a typo of a long brand name (`amazom.com`), a homoglyph spelling (`amaz0n`, `arnazon`, `rnicrosoft`), or the brand as a token in someone else's domain (`amazon-giftcards.shop`, `amazon.evil.com`) | deny (violation) |
+| `suspicious` | brand on an unlisted domain (`ikea.fr`), abused TLD (`.xyz`, `.top`, …), or a phishing word (`login`, `verify`, `refund`, `giftcard`, …) | escalate |
+| `unknown` | anything else | normal rules |
+
+The user's lists always win over the defaults, so a false positive is fixed with `earnest merchant trust <merchant>`. The default blocklist ships with pattern rules and no named third parties, since scam domains change daily; load a current feed with `earnest merchant import-blocklist <file>`.
+
+### 3b. Purchase history
+
+If the request names an `item`, the gateway compares it with what the user bought before at the same merchant:
+- **earnest purchases**: merchant, item, amount and the user's verdict.
+- **imported card statements** (see [Spending insights](../README.md#spending-insights)): merchant and amount only.
+
+Items are compared by word overlap (plurals folded): ≥ 0.8 is the *same item*, ≥ 0.4 a *similar item*. Confidence starts from the merchant status (verified 0.6, user-trusted 0.7, unknown 0.3, suspicious 0.1, untrusted 0) and then:
+
+| Signal | Effect |
+|---|---|
+| Bought from this merchant before | +0.15 (+0.05 more at 3+ purchases) |
+| Same item bought and kept here before | +0.2 (similar item: +0.1) |
+| Same or similar item here was rejected or disputed | −0.3, and the request escalates (check 12) |
+| Price more than 1.5× what the user paid for that item before | −0.1 |
+
+Level: high ≥ 0.75, medium ≥ 0.45, low otherwise. Untrusted merchants are always 0. Agents can call `check_merchant` before requesting to see the same block.
 
 ### Asking first
 

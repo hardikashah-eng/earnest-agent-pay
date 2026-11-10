@@ -17,6 +17,10 @@
     "ask_first": {
       "type": "boolean", "default": false,
       "description": "The agent is unsure and asks for approval before acting. Rewarded."
+    },
+    "item": {
+      "type": "string",
+      "description": "What is being bought (e.g. 'AA batteries, 24 pack'). Optional; lets the gateway match the user's past purchases at this merchant."
     }
   },
   "additionalProperties": false

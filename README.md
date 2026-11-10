@@ -68,7 +68,27 @@ Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config
 }
 ```
 
-The agent gets three tools: `list_mandates`, `get_limits` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
+The agent gets four tools: `list_mandates`, `get_limits`, `check_merchant` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
+
+## Merchant trust and purchase history
+
+Every request is checked against **who the merchant is** and **what you've bought before**:
+
+- **Known-good list**: ~40 top e-commerce merchants (Amazon, Walmart, Target, Costco, Best Buy, Apple, …) with their real domains and statement aliases, in [earnest/data/merchant_trust.json](earnest/data/merchant_trust.json). A verified merchant doesn't trigger the "new merchant" approval.
+- **Untrusted**: lookalikes of those merchants (`amaz0n.com`, `arnazon.com`, `amazon-giftcards.shop`, `targett.com`) and anything on your blocklist are **denied**, and count as a violation. Suspicious domains (a brand on an unlisted domain, abused TLDs, phishing words like `login` / `refund`) and hard-to-reverse payment rails (gift cards, crypto, wire transfers) are **escalated** to you.
+- **Your purchase history**: if the agent names the `item`, the gateway looks for the same or a similar item from the same merchant in past earnest purchases and your imported statements. A repeat purchase you kept raises confidence; one you rejected makes the gateway ask you first; a big price jump is flagged.
+
+Each decision includes a `confidence` block (low / medium / high and why). Your own lists always win:
+
+```bash
+python -m earnest merchant check amazon.com --user user_demo --item "AA batteries 24 pack"
+python -m earnest merchant distrust sketchy-deals.shop --user user_demo --reason "never shipped"
+python -m earnest merchant trust ikea.fr --user user_demo        # fix a false positive
+python -m earnest merchant import-blocklist fraud-feed.txt --user user_demo   # one domain per line
+python -m earnest merchant list --user user_demo
+```
+
+Rules and point values: [spec/SPEC.md](spec/SPEC.md) sections 3a and 3b.
 
 ## Spending insights
 

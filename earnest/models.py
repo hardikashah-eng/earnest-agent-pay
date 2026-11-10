@@ -191,6 +191,7 @@ class SpendRequest:
     recurring: bool = False
     international: bool = False
     ask_first: bool = False
+    item: str | None = None  # what's being bought; lets the gateway check purchase history
 
     @classmethod
     def from_dict(cls, d: dict) -> "SpendRequest":
@@ -208,10 +209,14 @@ class SpendRequest:
             recurring=_bool(d, "recurring"),
             international=_bool(d, "international"),
             ask_first=_bool(d, "ask_first"),
+            item=_string(d, "item"),
         )
 
     def to_dict(self) -> dict:
-        return {k: getattr(self, k) for k in self.__dataclass_fields__}
+        out = {k: getattr(self, k) for k in self.__dataclass_fields__}
+        if out["item"] is None:
+            del out["item"]
+        return out
 
 
 @dataclass
@@ -263,10 +268,13 @@ class Decision:
     reasons: list[str]
     tier: str
     credential: Credential | None = None
+    confidence: dict[str, Any] | None = None  # merchant trust + purchase history, see history.py
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {"request_id": self.request_id, "status": self.status,
                                "reasons": self.reasons, "tier": self.tier}
         if self.credential is not None:
             out["credential"] = self.credential.to_dict()
+        if self.confidence is not None:
+            out["confidence"] = self.confidence
         return out
