@@ -161,6 +161,23 @@ python -m earnest reputation import feed.json
 
 Trust records are Ed25519-signed and carry coarse bands only. Reputation contributions add differential-privacy noise on your machine, and a merchant only appears in a feed once five or more people contributed.
 
+## Sell it: photo, price range, done
+
+Show your agent a photo and say "sell this if you get $10 or more". It identifies the item, prices it from comparable listings and buyback quotes, shows where you'd net the most after fees and shipping, and asks you for one tap to confirm the range. Then it sells:
+- **Instant buyback** at or above your floor → sold, prepaid label.
+- **eBay** (connected) → listed with Best Offer auto-accept at your floor, so the first offer at or above it sells, even if no agent is running.
+- **Mercari, Poshmark, Facebook Marketplace** → ready-to-paste listings (title, description, price, photos, steps), plus sign-up links for platforms worth joining.
+
+It never lists or accepts below your floor (that's a violation for the agent), and once the item sells, every other listing is ended.
+
+```bash
+python -m earnest sell quick --title "The Hobbit, paperback" --category books --floor 10 --target 15 \
+    --photo https://my-photos.example/hobbit.jpg --user user_demo
+python -m earnest sell link ebay --user user_demo     # with EBAY_TOKEN and EBAY_*_POLICY_ID / EBAY_MERCHANT_LOCATION_KEY set
+python -m earnest sell items --user user_demo
+python -m earnest sell sync                           # pick up sales eBay auto-accepted
+```
+
 ## Spending insights
 
 Import your card statements and get the **top 5 things worth knowing each month**: fees you could avoid, prices that crept up, overlapping subscriptions, cheaper stores you already use, delivery habits and unusual spikes. Everything stays in your local SQLite file.

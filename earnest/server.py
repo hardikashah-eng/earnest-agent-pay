@@ -52,19 +52,20 @@ def make_handler(gateway, lock: threading.Lock, stripe_secret: str | None = None
             with lock:
                 try:
                     request_id, action = gateway.read_approval_token(token)
-                    pending = {p["request_id"]: p for p in _all_pending(gateway, request_id)}
+                    p = gateway.describe_pending(request_id)
                 except ValueError as e:
                     return self._page(400, "This link doesn't work", html.escape(str(e)))
-            p = pending.get(request_id)
             if p is None:
                 return self._page(410, "Already handled", "This request isn't waiting for you any more.")
-            what = f"${p['amount']:,.2f} at {p['merchant']}" + (f" for {p['item']}" if p.get("item") else "")
+            what = p.get("title") or (f"${p['amount']:,.2f} at {p['merchant']}" +
+                                      (f" for {p['item']}" if p.get("item") else ""))
             detail = html.escape(json.dumps({"reasons": p["reasons"], "agent_said": p["reason_given"],
                                              "confidence": (p.get("confidence") or {}).get("score")}, indent=1))
             verb = "Approve" if action == "approve" else "Deny"
+            noun = "sale" if p.get("merchant") == "sell" else "purchase"
             body = (f"<p>{html.escape(what)}</p><pre>{detail}</pre>"
                     f"<form method=post><button>{verb}</button></form>")
-            self._page(200, f"{verb} this purchase?", body, "#1a7f37" if action == "approve" else "#b42318")
+            self._page(200, f"{verb} this {noun}?", body, "#1a7f37" if action == "approve" else "#b42318")
 
         def do_POST(self):
             length = int(self.headers.get("Content-Length") or 0)
@@ -83,17 +84,17 @@ def make_handler(gateway, lock: threading.Lock, stripe_secret: str | None = None
                     d = gateway.resolve_token(self.path[3:])
                 except (ValueError, ValidationError) as e:
                     return self._page(400, "Couldn't do that", html.escape(str(e)))
-            if d.status == "approved":
+            status = getattr(d, "status", "")
+            if status == "approved":
                 self._page(200, "Approved", f"A ${d.credential.cap:,.2f} card was issued to the agent.", "#1a7f37")
+            elif status == "active":
+                self._page(200, "Selling", f"The agent can now sell it for ${d.floor:,.2f} or more.", "#1a7f37")
+            elif status == "escalated":
+                self._page(200, "Approved", "Thanks. One more adult needs to approve this purchase.", "#1a7f37")
             else:
-                self._page(200, "Denied", "The agent was told no.", "#b42318")
+                self._page(200, "Done", "The agent was told no.", "#b42318")
 
     return Handler
-
-
-def _all_pending(gateway, request_id: str) -> list[dict]:
-    row = gateway.ledger.get_request(request_id)
-    return gateway.pending(row["user_id"]) if row else []
 
 
 def serve(gateway, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
