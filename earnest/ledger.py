@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS household_members (
 CREATE TABLE IF NOT EXISTS request_approvals (
     request_id TEXT NOT NULL, approver TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (request_id, approver)
 );
+CREATE TABLE IF NOT EXISTS trusted_issuers (user_id TEXT NOT NULL, kid TEXT NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY (user_id, kid));
+CREATE TABLE IF NOT EXISTS merchant_reputation (merchant TEXT PRIMARY KEY, data TEXT NOT NULL, at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (credential_id TEXT PRIMARY KEY, request_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS verifications (
@@ -304,6 +307,39 @@ class Ledger:
     def request_events(self, request_id: str) -> list[dict]:
         return [dict(r) for r in self.db.execute(
             "SELECT kind, points, at FROM events WHERE request_id = ? ORDER BY id", (request_id,))]
+
+    # --- portable trust & shared reputation ---
+    def trust_issuer(self, user_id: str, kid: str, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO trusted_issuers VALUES (?, ?, ?)", (user_id, kid, at.isoformat()))
+
+    def trusted_issuers(self, user_id: str) -> set[str]:
+        return {r["kid"] for r in self.db.execute("SELECT kid FROM trusted_issuers WHERE user_id = ?", (user_id,))}
+
+    def has_event(self, user_id: str, agent_id: str, task_type: str, kind: str, request_id: str) -> bool:
+        return self.db.execute(
+            "SELECT 1 FROM events WHERE user_id = ? AND agent_id = ? AND task_type = ? AND kind = ? "
+            "AND request_id = ? LIMIT 1", (user_id, agent_id, task_type, kind, request_id)).fetchone() is not None
+
+    def count_events_since(self, user_id: str, agent_id: str, task_type: str, kinds: tuple[str, ...],
+                           since_iso: str) -> int:
+        q = ",".join("?" * len(kinds))
+        return self.db.execute(
+            f"SELECT COUNT(*) AS n FROM events WHERE user_id = ? AND agent_id = ? AND task_type = ? "
+            f"AND kind IN ({q}) AND at >= ?", (user_id, agent_id, task_type, *kinds, since_iso)).fetchone()["n"]
+
+    def set_reputation_feed(self, merchants: dict, at: datetime) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM merchant_reputation")
+            for m, entry in merchants.items():
+                self.db.execute("INSERT INTO merchant_reputation VALUES (?, ?, ?)", (m, json.dumps(entry), at.isoformat()))
+
+    def reputation(self, keys: set[str]) -> dict | None:
+        for k in sorted(keys):
+            row = self.db.execute("SELECT data FROM merchant_reputation WHERE merchant = ?", (k,)).fetchone()
+            if row:
+                return json.loads(row["data"])
+        return None
 
     # --- learned confidence weights ---
     def confidence_weights(self, user_id: str) -> dict | None:
