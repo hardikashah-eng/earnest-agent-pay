@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -138,6 +139,13 @@ def _context_cmd(args, gw: Gateway) -> int:
     return 0
 
 
+def _backend_from_env():
+    if os.environ.get("EARNEST_BACKEND", "mock") == "stripe":
+        from .backends import StripeIssuingBackend
+        return StripeIssuingBackend(os.environ["STRIPE_CARDHOLDER_ID"])
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="earnest", description="Agents earn spending limits by behaving well.")
     ap.add_argument("--db", default="earnest.db", help="SQLite ledger file (default: earnest.db)")
@@ -198,6 +206,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("amount", type=float)
     p.add_argument("merchant")
     p.add_argument("--items", help="JSON file with cart line items [{item, amount, quantity}]")
+    p = sub.add_parser("serve", help="serve approval links (and the Stripe webhook) over HTTP")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8787)
+    p = sub.add_parser("ap2", help="AP2 interop: export an Intent mandate, check a merchant's Cart mandate")
+    p.add_argument("action", choices=["intent", "check-cart"])
+    p.add_argument("request_id")
+    p.add_argument("cart", nargs="?", help="Cart mandate JSON file (check-cart)")
     p = sub.add_parser("demo", help="run the two-agent simulation and write a chart")
     p.add_argument("--out", default="demo/limits.svg")
     p.add_argument("--days", type=int, default=40)
@@ -229,7 +244,9 @@ def main(argv: list[str] | None = None) -> int:
         run(out=args.out, days=args.days)
         return 0
 
-    gw = Gateway(Ledger(args.db))
+    from .approvals import notifier_from_env
+    gw = Gateway(Ledger(args.db), backend=_backend_from_env(), notifier=notifier_from_env(),
+                 approval_url=os.environ.get("EARNEST_APPROVAL_URL"))
     try:
         if args.cmd == "profile":
             _print(gw.set_profile(_load(args.file)).to_dict())
@@ -261,6 +278,21 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "serve":
+            from .server import serve
+            server = serve(gw, args.host, args.port)
+            print(f"earnest listening on http://{args.host}:{args.port} (links use {gw.approval_url})")
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                pass
+        elif args.cmd == "ap2":
+            if args.action == "intent":
+                _print(gw.ap2_intent_mandate(args.request_id))
+            else:
+                if not args.cart:
+                    ap.error("ap2 check-cart needs a cart mandate file")
+                _print(gw.check_ap2_cart(args.request_id, _load(args.cart)))
         elif args.cmd == "reconcile":
             _print(gw.reconcile(args.user))
         elif args.cmd == "charge":

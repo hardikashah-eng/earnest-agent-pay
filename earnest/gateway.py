@@ -6,6 +6,8 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
+from . import ap2
+from .approvals import ApprovalMessage, make_token, read_token
 from .backends.mock import MockBackend
 from .confidence import score as confidence_score
 from .history import Interest, PastPurchase, item_tokens, summarize
@@ -25,12 +27,15 @@ def utcnow() -> datetime:
 class Gateway:
     def __init__(self, ledger: Ledger | None = None, backend=None,
                  clock: Callable[[], datetime] = utcnow, tiers: tuple[Tier, ...] = DEFAULT_TIERS,
-                 merchants: MerchantRegistry | None = None):
+                 merchants: MerchantRegistry | None = None, notifier=None,
+                 approval_url: str | None = None):
         self.ledger = ledger or Ledger()
         self.backend = backend or MockBackend()
         self.clock = clock
         self.tiers = tiers
         self.merchants = merchants or MerchantRegistry.default()
+        self.notifier = notifier
+        self.approval_url = (approval_url or "http://localhost:8787").rstrip("/")
 
     # --- setup (user side) ---
     def set_profile(self, profile: Profile | dict) -> Profile:
@@ -172,6 +177,9 @@ class Gateway:
         self.ledger.add_request(request_id, mandate.user_id, mandate.task_type, req,
                                 decision.status, decision.to_dict(), now)
 
+        if decision.status == "escalated" and self.notifier is not None:
+            self._notify(request_id, req, decision)
+
         key = (mandate.user_id, req.agent_id, mandate.task_type)
         if verdict.violation:
             self.ledger.add_points(*key, "violation", VIOLATION, request_id, now)
@@ -253,8 +261,64 @@ class Gateway:
         last = self.ledger.last_event(user_id, agent_id, task_type, "item_mismatch")
         return last is not None and now - last < timedelta(days=MISMATCH_SUSPENDS_DAYS)
 
+    # --- approvals on your phone or in chat ---
+    def approval_links(self, request_id: str) -> tuple[str, str]:
+        secret, now = self.ledger.secret("approvals"), self.clock().timestamp()
+        return tuple(f"{self.approval_url}/a/{make_token(secret, request_id, a, now)}"
+                     for a in ("approve", "deny"))
+
+    def _notify(self, request_id: str, req: SpendRequest, decision: Decision) -> None:
+        approve, deny = self.approval_links(request_id)
+        try:
+            self.notifier.notify(ApprovalMessage(
+                request_id, req.agent_id, req.merchant, req.amount, req.item, req.reason,
+                decision.reasons, decision.confidence, approve, deny))
+        except Exception:
+            pass  # notification trouble never blocks a decision; `earnest pending` still lists it
+
+    def read_approval_token(self, token: str) -> tuple[str, str]:
+        return read_token(self.ledger.secret("approvals"), token, self.clock().timestamp())
+
+    def resolve_token(self, token: str) -> Decision:
+        request_id, action = self.read_approval_token(token)
+        return self.resolve(request_id, approve=action == "approve")
+
+    # --- AP2 interop ---
+    def _approved(self, request_id: str) -> tuple[dict, dict, dict]:
+        row = self.ledger.get_request(request_id)
+        if row is None or row["status"] != "approved":
+            raise ValidationError(f"request {request_id} is not approved")
+        decision = json.loads(row["decision"])
+        return dict(row), json.loads(row["data"]), decision["credential"]
+
+    def ap2_intent_mandate(self, request_id: str) -> dict:
+        """The approved request as an AP2 Intent mandate, attested by this gateway."""
+        row, data, cred = self._approved(request_id)
+        mandate = self.ledger.get_mandate(row["mandate_id"])
+        return ap2.intent_mandate(
+            description=mandate.intent, merchant=row["merchant"], amount=cred["cap"],
+            currency=cred["currency"], expires_at=datetime.fromisoformat(cred["expires_at"]),
+            request_id=request_id, item=data.get("item"),
+            needs_cart_confirmation=mandate.approval != "auto", secret=self.ledger.secret("ap2"))
+
+    def check_ap2_cart(self, request_id: str, cart_mandate: dict) -> dict:
+        """Check a merchant's AP2 Cart mandate against the approved request before paying."""
+        _, data, cred = self._approved(request_id)
+        ok, reason = ap2.check_cart_mandate(
+            cart_mandate, merchant_lock=cred["merchant_lock"], cap=cred["cap"], currency=cred["currency"],
+            item_lock=cred.get("item_lock"), now=self.clock())
+        out = {"ok": ok, "reason": reason}
+        if reason.startswith("item_mismatch"):
+            out["verification"] = self._record_verification(request_id, "mismatch", reason)
+        elif ok and cred.get("item_lock"):
+            out["verification"] = self._record_verification(request_id, "verified", "AP2 cart matched")
+        return out
+
     # --- item verification (spec section 3d) ---
     def _record_verification(self, request_id: str, status: str, detail: str) -> dict:
+        prior = self.ledger.verification(request_id)
+        if prior and prior["status"] in ("verified", "mismatch"):
+            return {"request_id": request_id, "status": prior["status"], "detail": prior["detail"]}
         row = self.ledger.get_request(request_id)
         now = self.clock()
         self.ledger.set_verification(request_id, status, detail, now)

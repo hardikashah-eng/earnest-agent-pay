@@ -105,6 +105,25 @@ python -m earnest merchant import-blocklist fraud-feed.txt --user user_demo   # 
 
 Card statements (`earnest import`, below) also count: a store on your card bill is a store you know. Rules and numbers: [spec/SPEC.md](spec/SPEC.md) sections 3a–3c.
 
+## Real cards (Stripe test mode), AP2 and approvals on your phone
+
+**Stripe Issuing (test mode).** Approved requests become real virtual cards with an all-time limit equal to the approved amount; merchant lock, expiry, single use and the item lock are enforced in Stripe's real-time authorization webhook. Live keys are refused.
+
+```bash
+export EARNEST_BACKEND=stripe STRIPE_API_KEY=sk_test_... STRIPE_CARDHOLDER_ID=ich_... STRIPE_WEBHOOK_SECRET=whsec_...
+python -m earnest serve --port 8787     # point Stripe's Issuing authorization webhook at /stripe/webhook
+```
+
+**AP2.** `earnest ap2 intent <request_id>` exports an approved request as an AP2 Intent mandate with an earnest attestation; `earnest ap2 check-cart <request_id> cart.json` checks a merchant's Cart mandate (merchant, total, expiry, claimed item) before paying. Agents get the same as MCP tools.
+
+**Approvals in Slack, Lark or on your phone.** Escalations are sent with the four confidence factors and one-tap Approve / Deny links. Opening a link shows a confirm page; only the button acts, so chat link previews can't approve anything.
+
+```bash
+export EARNEST_NOTIFY="slack:https://hooks.slack.com/...,ntfy:https://ntfy.sh/my-earnest"   # also lark:, webhook:
+export EARNEST_APPROVAL_URL=https://earnest.my-tunnel.example
+python -m earnest serve
+```
+
 ## Spending insights
 
 Import your card statements and get the **top 5 things worth knowing each month**: fees you could avoid, prices that crept up, overlapping subscriptions, cheaper stores you already use, delivery habits and unusual spikes. Everything stays in your local SQLite file.

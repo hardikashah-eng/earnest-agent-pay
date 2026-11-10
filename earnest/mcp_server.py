@@ -15,6 +15,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
+from .approvals import notifier_from_env
 from .gateway import Gateway
 from .ledger import Ledger
 from .models import ValidationError
@@ -24,7 +25,13 @@ AGENT_ID = os.environ.get("EARNEST_AGENT_ID", "agent_default")
 DB_PATH = os.environ.get("EARNEST_DB", "earnest.db")
 
 mcp = FastMCP("earnest")
-_gateway = Gateway(Ledger(DB_PATH))
+_gateway = Gateway(Ledger(DB_PATH), notifier=notifier_from_env(),
+                   approval_url=os.environ.get("EARNEST_APPROVAL_URL"))
+
+
+def _own(request_id: str) -> bool:
+    row = _gateway.ledger.get_request(request_id)
+    return row is not None and row["agent_id"] == AGENT_ID and row["user_id"] == USER_ID
 
 
 @mcp.tool()
@@ -73,6 +80,31 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
             payload["quantity"] = quantity
         return _gateway.request_spend(payload).to_dict()
     except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def get_ap2_intent_mandate(request_id: str) -> dict:
+    """For one of your approved requests: an AP2 Intent mandate to present to an AP2 merchant,
+    attested by earnest (merchant, max amount, item, expiry)."""
+    if not _own(request_id):
+        return {"status": "invalid", "error": "not one of your requests"}
+    try:
+        return _gateway.ap2_intent_mandate(request_id)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def check_ap2_cart(request_id: str, cart_mandate: dict) -> dict:
+    """Before paying an AP2 merchant: check its Cart mandate against your approved request
+    (merchant, total within the approved amount, the item you named is in the cart).
+    A cart without your claimed item is a violation."""
+    if not _own(request_id):
+        return {"status": "invalid", "error": "not one of your requests"}
+    try:
+        return _gateway.check_ap2_cart(request_id, cart_mandate)
+    except (ValidationError, KeyError) as e:
         return {"status": "invalid", "error": str(e)}
 
 
