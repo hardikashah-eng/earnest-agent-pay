@@ -86,6 +86,14 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
 
 
 @mcp.tool()
+def report_price(merchant: str, item: str, price: float, product_id: str = "", url: str = "") -> dict:
+    """Report a price you saw for an item at a store while shopping. Reports from agents can
+    only flag that a cheaper store exists; they never raise confidence in a price."""
+    _gateway.report_price(merchant, item, price, f"agent:{AGENT_ID}", product_id or None, url or None)
+    return {"status": "recorded"}
+
+
+@mcp.tool()
 def get_ap2_intent_mandate(request_id: str) -> dict:
     """For one of your approved requests: an AP2 Intent mandate to present to an AP2 merchant,
     attested by earnest (merchant, max amount, item, expiry)."""

@@ -122,6 +122,16 @@ The confidence score trusts the `item` the agent names, so earnest checks it:
 
 A mismatch also **suspends the agent's routine-repeat pass for 90 days** for that task type, and the false claim is dropped from the purchase history, so it can't build familiarity.
 
+### 3e. Learned weights and market prices
+
+**Learned weights.** Every scored purchase keeps its four factor scores. A verdict of *accepted* is a positive label; *rejected*, *disputed* or an item mismatch is negative. `earnest confidence fit` fits a logistic regression on those labels (L2-pulled toward the default weights), turns the positive coefficients into weights that sum to 1, and blends them with the defaults by `n / (n + 30)`. Nothing is learned below 10 verdicts or without both outcomes. The fit is kept only if it predicts held-out verdicts (5-fold Brier score) at least as well as the defaults; the report shows both, plus how often purchases in each confidence band were kept.
+
+**Market prices.** Quotes for the same item (product ID or same-item text match) from verified merchants in the last 7 days come from a price connector (`PriceSource`), a user CSV, or agents (`report_price`).
+- Another verified store ≥ 15% cheaper → signal `cheaper_elsewhere:<store>:<price>`, price factor capped at 0.6, and **escalated for frugal users** (`price_sensitivity` ≥ 0.7).
+- Within 2% of the best *non-agent* quote → `best_market_price`, price factor at least 0.85. Agent-reported quotes can lower confidence but never raise it.
+- No personal price history → the market median is the price reference.
+- Paying ≥ 20% over the lowest recent price the user paid, with ≥ 14 days to the deadline (or none) → `consider_waiting:<price>`.
+
 ## 4. Scoring
 
 | Event | Points |
