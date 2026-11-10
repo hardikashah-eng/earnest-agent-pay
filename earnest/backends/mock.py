@@ -16,11 +16,12 @@ class MockBackend:
         self.spent: dict[str, float] = {}
 
     def issue(self, *, cap: float, currency: str, merchant: str, lifetime_hours: float,
-              single_use: bool, now: datetime, item: str | None = None) -> Credential:
+              single_use: bool, now: datetime, item: str | None = None,
+              product_id: str | None = None) -> Credential:
         cred = Credential(
             id="card_" + uuid.uuid4().hex[:12], cap=round(cap, 2), currency=currency,
             merchant_lock=merchant, expires_at=now + timedelta(hours=lifetime_hours),
-            single_use=single_use, backend=self.name, item_lock=item)
+            single_use=single_use, backend=self.name, item_lock=item, product_lock=product_id)
         self.cards[cred.id] = cred
         self.spent[cred.id] = 0.0
         return cred
@@ -41,7 +42,7 @@ class MockBackend:
         if self.spent[cred.id] + amount > cred.cap + 1e-9:
             return False, "over_cap"
         if cred.item_lock and line_items is not None:
-            ok, reason = check_cart(cred.item_lock, line_items)
+            ok, reason = check_cart(cred.item_lock, line_items, cred.product_lock)
             if not ok:
                 return False, reason
         self.spent[cred.id] += amount

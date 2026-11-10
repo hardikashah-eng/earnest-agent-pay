@@ -76,7 +76,7 @@ def _insights_cmd(args, gw: Gateway) -> int:
 def _merchant_cmd(args, gw: Gateway) -> int:
     if args.action == "check":
         _print(gw.check_merchant(args.user, args.merchant, args.item, args.amount or 0.0, args.category,
-                                 args.mandate, args.quantity))
+                                 args.mandate, args.quantity, args.product_id))
     elif args.action == "trust":
         gw.trust_merchant(args.user, args.merchant, args.reason or "user")
         print(f"trusted {args.merchant}")
@@ -180,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reason")
     p.add_argument("--mandate", help="for check: score against this mandate's budget")
     p.add_argument("--quantity", type=int, default=1)
+    p.add_argument("--product-id", help="ASIN or UPC/GTIN, for check")
 
     p = sub.add_parser("orders", help="import retailer order history (Amazon, Costco, Walmart, Target, ...)")
     p.add_argument("action", choices=["import", "list"])
@@ -206,6 +207,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("amount", type=float)
     p.add_argument("merchant")
     p.add_argument("--items", help="JSON file with cart line items [{item, amount, quantity}]")
+    p = sub.add_parser("receipts", help="import itemized purchases from emailed receipts")
+    p.add_argument("action", choices=["import", "imap"])
+    p.add_argument("path", nargs="?", help="mbox file (e.g. Google Takeout), Maildir, .eml file or folder")
+    p.add_argument("--user", required=True)
+    p.add_argument("--host", help="IMAP host, e.g. imap.gmail.com (password in EARNEST_IMAP_PASSWORD)")
+    p.add_argument("--username", help="IMAP login")
+    p.add_argument("--days", type=int, default=180, help="IMAP: how far back to look")
+    p.add_argument("--allow-unauthenticated", action="store_true",
+                   help="accept receipts without a DKIM pass (not recommended)")
     p = sub.add_parser("serve", help="serve approval links (and the Stripe webhook) over HTTP")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8787)
@@ -278,6 +288,21 @@ def main(argv: list[str] | None = None) -> int:
             if args.cmd == "interest" and args.action == "add" and args.source is None:
                 args.source = "user"
             return _context_cmd(args, gw)
+        elif args.cmd == "receipts":
+            from .insights.receipts import import_receipts, read_imap, read_path, retailer_domains, since_days
+            if args.action == "import":
+                if not args.path:
+                    ap.error("receipts import needs a path")
+                messages = read_path(args.path)
+            else:
+                if not (args.host and args.username and os.environ.get("EARNEST_IMAP_PASSWORD")):
+                    ap.error("receipts imap needs --host, --username and EARNEST_IMAP_PASSWORD")
+                messages = read_imap(args.host, args.username, os.environ["EARNEST_IMAP_PASSWORD"],
+                                     since_days(args.days), retailer_domains())
+            result = import_receipts(gw.ledger, messages, args.user, not args.allow_unauthenticated,
+                                     f"email:{args.action}")
+            result["reconciled"] = gw.reconcile(args.user)
+            _print(result)
         elif args.cmd == "serve":
             from .server import serve
             server = serve(gw, args.host, args.port)

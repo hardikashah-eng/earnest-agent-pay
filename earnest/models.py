@@ -67,6 +67,18 @@ def _no_extra(d: dict, allowed: set[str], what: str):
         raise ValidationError(f"{what} has unknown fields: {sorted(extra)}")
 
 
+def _product_id(d: dict) -> str | None:
+    from .products import normalize
+    raw = _string(d, "product_id")
+    if raw is None:
+        return None
+    pid = normalize(raw)
+    if pid is None:
+        raise ValidationError("product_id must be an ASIN, a UPC/EAN/GTIN with a valid check digit, "
+                              "or prefixed like sku:<retailer>:<id>")
+    return pid
+
+
 def _quantity(d: dict) -> int:
     v = d.get("quantity", 1)
     if isinstance(v, bool) or not isinstance(v, int) or v < 1:
@@ -202,6 +214,7 @@ class SpendRequest:
     ask_first: bool = False
     item: str | None = None  # what's being bought; lets the gateway check purchase history
     quantity: int = 1        # units in `amount`, so prices compare per unit
+    product_id: str | None = None  # ASIN / UPC / GTIN when the agent knows it (see products.py)
 
     @classmethod
     def from_dict(cls, d: dict) -> "SpendRequest":
@@ -221,6 +234,7 @@ class SpendRequest:
             ask_first=_bool(d, "ask_first"),
             item=_string(d, "item"),
             quantity=_quantity(d),
+            product_id=_product_id(d),
         )
 
     def to_dict(self) -> dict:
@@ -229,6 +243,8 @@ class SpendRequest:
             del out["item"]
         if out["quantity"] == 1:
             del out["quantity"]
+        if out["product_id"] is None:
+            del out["product_id"]
         return out
 
 
@@ -266,6 +282,7 @@ class Credential:
     single_use: bool
     backend: str
     item_lock: str | None = None  # the item the agent claimed; checked against cart line items
+    product_lock: str | None = None  # its product ID, when known; beats text matching
 
     def to_dict(self) -> dict:
         out = {
@@ -275,6 +292,8 @@ class Credential:
         }
         if self.item_lock:
             out["item_lock"] = self.item_lock
+        if self.product_lock:
+            out["product_lock"] = self.product_lock
         return out
 
 

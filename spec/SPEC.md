@@ -87,7 +87,7 @@ The gateway gathers what the user has bought and wants, from:
 | Memberships (Prime, Costco, Walmart+, Target Circle, a local co-op) | — | `earnest membership add` |
 | Interests (wishlist, cart, "I want a standing desk under $350") | yes, optional max price and merchant | `earnest interest add` / `earnest interest import` |
 
-Items are compared by word overlap with plurals folded; a specific description (3+ words) whose words all appear in a longer retail title also counts (`AA batteries 24 pack` = `Amazon Basics AA Batteries, 24 Pack`). ≥ 0.8 is the *same item*, ≥ 0.4 a *similar item*. Cancelled, returned and refunded order lines are ignored. Only prices from the last 365 days (latest 5) are used as a price reference.
+**Product IDs** (ASIN, GTIN, retailer SKU) win when both sides have one: equal IDs are the same item whatever the titles say; different IDs are at most similar. Otherwise items are compared by word overlap with plurals folded; a specific description (3+ words) whose words all appear in a longer retail title also counts (`AA batteries 24 pack` = `Amazon Basics AA Batteries, 24 Pack`). ≥ 0.8 is the *same item*, ≥ 0.4 a *similar item*. Cancelled, returned and refunded order lines are ignored. Only prices from the last 365 days (latest 5) are used as a price reference.
 
 A merchant counts as **known** (check 13 and the `no_new_merchants` rule) if it appears in any purchase source or the user is a member there. A same or similar item at this merchant that the user **rejected or disputed** escalates (check 12).
 

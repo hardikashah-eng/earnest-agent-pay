@@ -93,10 +93,11 @@ class Gateway:
             item = None if p["verification"] == "mismatch" else p["item"]
             past.append(PastPurchase(frozenset(self.merchants.canonical(p["merchant"])),
                                      p["amount"] / max(1, p["quantity"]),
-                                     datetime.fromisoformat(p["at"]).date(), "earnest", item, p["verdict"]))
+                                     datetime.fromisoformat(p["at"]).date(), "earnest", item, p["verdict"],
+                                     p["product_id"] if item else None))
         for o in self.ledger.orders(user_id):
             past.append(PastPurchase(frozenset(self.merchants.canonical(o["merchant"])), o["unit_price"],
-                                     date.fromisoformat(o["date"]), "order", o["item"]))
+                                     date.fromisoformat(o["date"]), "order", o["item"], None, o["product_id"]))
         for t in self.ledger.statement_purchases(user_id):
             past.append(PastPurchase(frozenset(self.merchants.canonical(t["merchant"])), t["amount"],
                                      date.fromisoformat(t["date"]), "statement"))
@@ -111,14 +112,15 @@ class Gateway:
                 if keys & self.merchants.canonical(m["merchant"])]
 
     def assess(self, user_id: str, merchant: str, *, item: str | None = None, amount: float = 0.0,
-               quantity: int = 1, category: str | None = None, mandate: Mandate | None = None):
+               quantity: int = 1, category: str | None = None, mandate: Mandate | None = None,
+               product_id: str | None = None):
         """Everything known about a prospective purchase.
         Returns (MerchantCheck, History, is_known_merchant, confidence dict)."""
         check = self.merchants.check(merchant, self.ledger.merchant_overrides(user_id))
         keys = self.merchants.canonical(merchant)
         past = self._past_purchases(user_id)
         hist = summarize(keys, past, item, self.clock().date(), self._interests(user_id),
-                         self._memberships_at(user_id, keys))
+                         self._memberships_at(user_id, keys), product_id)
         known = bool(hist.memberships) or any(keys & p.merchant_keys for p in past)
         extra = []
         if category and self.merchants.high_risk_category(category):
@@ -133,13 +135,15 @@ class Gateway:
         return check, hist, known, conf
 
     def check_merchant(self, user_id: str, merchant: str, item: str | None = None, amount: float = 0.0,
-                       category: str | None = None, mandate_id: str | None = None, quantity: int = 1) -> dict:
+                       category: str | None = None, mandate_id: str | None = None, quantity: int = 1,
+                       product_id: str | None = None) -> dict:
         """What an agent should know before buying: trust, history, and the confidence score."""
         mandate = self.ledger.get_mandate(mandate_id) if mandate_id else None
         if mandate is not None and mandate.user_id != user_id:
             mandate = None
+        from .products import normalize
         return self.assess(user_id, merchant, item=item, amount=amount, quantity=quantity,
-                           category=category, mandate=mandate)[3]
+                           category=category, mandate=mandate, product_id=normalize(product_id))[3]
 
     # --- agent side ---
     def request_spend(self, request: SpendRequest | dict) -> Decision:
@@ -158,7 +162,7 @@ class Gateway:
         score, t = self.tier(mandate.user_id, req.agent_id, mandate.task_type)
         check, hist, bought_here, conf = self.assess(
             mandate.user_id, req.merchant, item=req.item, amount=req.amount, quantity=req.quantity,
-            category=req.category, mandate=mandate)
+            category=req.category, mandate=mandate, product_id=req.product_id)
         if self._routine_suspended(mandate.user_id, req.agent_id, mandate.task_type, now):
             conf["signals"].append("routine_suspended")
         verdict = decide(
@@ -253,7 +257,7 @@ class Gateway:
         cred = self.backend.issue(
             cap=req.amount, currency=mandate.currency, merchant=req.merchant,
             lifetime_hours=t.lifetime_hours, single_use=t.single_use or profile.privacy >= 0.8, now=now,
-            item=req.item)
+            item=req.item, product_id=req.product_id)
         self.ledger.link_credential(cred.id, request_id)
         return cred
 
@@ -306,7 +310,7 @@ class Gateway:
         _, data, cred = self._approved(request_id)
         ok, reason = ap2.check_cart_mandate(
             cart_mandate, merchant_lock=cred["merchant_lock"], cap=cred["cap"], currency=cred["currency"],
-            item_lock=cred.get("item_lock"), now=self.clock())
+            item_lock=cred.get("item_lock"), now=self.clock(), product_lock=cred.get("product_lock"))
         out = {"ok": ok, "reason": reason}
         if reason.startswith("item_mismatch"):
             out["verification"] = self._record_verification(request_id, "mismatch", reason)
@@ -349,7 +353,8 @@ class Gateway:
         """Match approved purchases that named an item against the user's order history."""
         today = self.clock().date()
         orders = [(frozenset(self.merchants.canonical(o["merchant"])),
-                   OrderLine(o["item"], o["unit_price"] * o["quantity"], date.fromisoformat(o["date"])))
+                   OrderLine(o["item"], o["unit_price"] * o["quantity"], date.fromisoformat(o["date"]),
+                             o["product_id"]))
                   for o in self.ledger.orders(user_id)]
         results = []
         for p in self.ledger.purchases(user_id):
@@ -358,7 +363,7 @@ class Gateway:
             keys = self.merchants.canonical(p["merchant"])
             here = [line for k, line in orders if keys & k]
             status, detail = reconcile(p["item"], p["amount"], datetime.fromisoformat(p["at"]).date(),
-                                       here, today)
+                                       here, today, p["product_id"])
             if status == "pending" and p["verification"] == "pending":
                 continue
             results.append(self._record_verification(p["request_id"], status, detail))

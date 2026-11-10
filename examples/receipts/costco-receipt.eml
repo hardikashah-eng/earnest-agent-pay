@@ -1,0 +1,24 @@
+From: Costco <receipts@costco.com>
+To: you@example.com
+Subject: Your Costco.com Order Confirmation
+Date: Sat, 01 Nov 2026 14:30:00 -0700
+Authentication-Results: mx.example.com; dkim=pass header.d=costco.com; spf=pass
+X-Earnest-Example: synthetic test fixture, not a real order
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Thank you for your order.
+Order Number: 1000000099
+
+Kirkland Signature Paper Towels, 12 Rolls
+Item # 1234567
+Quantity: 1
+$24.99
+
+Kirkland Signature Olive Oil 2L
+Quantity: 2
+$53.98
+
+Subtotal $78.97
+Tax $0.00
+Total $78.97

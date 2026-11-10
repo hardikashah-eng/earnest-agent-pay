@@ -22,6 +22,10 @@
       "type": "string",
       "description": "What is being bought (e.g. 'AA batteries, 24 pack'). Optional; lets the gateway match the user's past purchases, order history and interests."
     },
+    "product_id": {
+      "type": "string",
+      "description": "ASIN, UPC/EAN/GTIN (check digit verified) or sku:<retailer>:<id>. When known on both sides, decides 'same item' for history and checkout checks."
+    },
     "quantity": {
       "type": "integer", "minimum": 1, "default": 1,
       "description": "Units covered by amount, so prices are compared per unit."

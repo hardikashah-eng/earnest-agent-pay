@@ -23,6 +23,7 @@ from datetime import date, datetime
 from typing import Protocol
 
 from ..models import ValidationError
+from ..products import normalize as normalize_product
 from .statement import _parse_amount, _parse_date
 
 DATE_COLS = ("order date", "purchase date", "date", "transaction date", "order placed")
@@ -32,6 +33,8 @@ TOTAL_COLS = ("item total", "total owed", "item subtotal", "total", "amount")
 QTY_COLS = ("quantity", "qty", "units")
 MERCHANT_COLS = ("website", "retailer", "store", "merchant")
 STATUS_COLS = ("order status", "status")
+ID_COLS = (("asin", "asin"), ("gtin", "gtin"), ("upc", "upc"), ("ean", "ean"),
+           ("item number", "sku"), ("item #", "sku"), ("item no", "sku"), ("sku", "sku"))
 SKIP_STATUS = ("cancel", "return", "refund")
 
 
@@ -43,6 +46,7 @@ class Order:
     item: str
     unit_price: float
     quantity: int = 1
+    product_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ def parse_orders_csv(text: str, user_id: str, retailer: str | None = None) -> li
     unit_col, total_col = _pick(header, UNIT_COLS), _pick(header, TOTAL_COLS)
     qty_col, merch_col = _pick(header, QTY_COLS), _pick(header, MERCHANT_COLS)
     status_col, ref_col = _pick(header, STATUS_COLS), _pick(header, ("order id", "order number", "order #"))
+    id_cols = [(header[name], kind) for name, kind in ID_COLS if name in header]
     if not date_col or not item_col or not (unit_col or total_col):
         raise ValidationError(f"couldn't find date/item/price columns in {reader.fieldnames}")
     if not merch_col and not retailer:
@@ -114,8 +119,13 @@ def parse_orders_csv(text: str, user_id: str, retailer: str | None = None) -> li
         ref = (row.get(ref_col) or "").strip() if ref_col else ""
         k = (d, item.lower(), round(unit, 2), ref)
         seen[k] = seen.get(k, 0) + 1
+        pid = None
+        for col, kind in id_cols:
+            pid = normalize_product(row.get(col), kind, merchant if kind == "sku" else None)
+            if pid:
+                break
         out.append(Order(order_id(user_id, merchant, d, item, unit, ref, seen[k]), d, merchant, item,
-                         round(unit, 2), qty))
+                         round(unit, 2), qty, pid))
     return out
 
 
