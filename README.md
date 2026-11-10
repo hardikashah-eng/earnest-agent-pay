@@ -101,6 +101,8 @@ python -m earnest merchant distrust sketchy-deals.shop --user user_demo --reason
 python -m earnest merchant import-blocklist fraud-feed.txt --user user_demo   # one domain per line
 ```
 
+**It learns what matters to you.** `earnest confidence fit` learns your factor weights from your verdicts (kept only if they predict better than the defaults on held-out data). **Market prices** from other verified stores flag when it's cheaper elsewhere (frugal profiles get asked) and suggest waiting when the price is well above what you usually pay.
+
 **Agents can't fake the item.** Cards are locked to the claimed item: a cart without it is declined. Orders are reconciled after the fact (`earnest reconcile`); a mismatch costs −10 and suspends the routine pass for 90 days.
 
 **Email receipts** cover stores without an order export (Costco, Walmart, Target, …). Only mail from a verified merchant's domain with a DKIM pass is read, refunds and returns are skipped, and an order's confirmation and shipping emails count once:
@@ -132,6 +134,32 @@ export EARNEST_NOTIFY="slack:https://hooks.slack.com/...,ntfy:https://ntfy.sh/my
 export EARNEST_APPROVAL_URL=https://earnest.my-tunnel.example
 python -m earnest serve
 ```
+
+## After the purchase, and for the whole household
+
+```bash
+python -m earnest reorder list --user user_demo --within 14          # what you'll run out of soon
+python -m earnest reorder standing "AA batteries 24 pack" --max-price 20 --every-days 60 --user user_demo
+python -m earnest followup --user user_demo    # verdicts due, deliveries, price drops, renewals, returns
+python -m earnest returns --user user_demo     # rejected items you can still return, windows closing
+python -m earnest dispute <request_id> --out disputes/   # evidence pack for a chargeback
+python -m earnest household set examples/households/family.json      # allowances, budget, two-adult rule
+python -m earnest approve <request_id> --as user_partner
+```
+
+Standing mandates let an agent restock without asking, only for that item, at or under that price, and not more often than the interval. Purchases verified and kept past the return window count as accepted automatically, so trust grows without you reporting every good outcome.
+
+## Trust that travels, and reputation that's shared
+
+```bash
+python -m earnest trust export agent_x.jwt --user user_demo --agent agent_shopper --task software
+python -m earnest trust import agent_x.jwt --user friend --trust-issuer     # head start, capped at "established"
+python -m earnest reputation contribute my-contribution.json --user user_demo   # noisy counts, no identity
+python -m earnest reputation aggregate contributions/ --out feed.json --k 5
+python -m earnest reputation import feed.json
+```
+
+Trust records are Ed25519-signed and carry coarse bands only. Reputation contributions add differential-privacy noise on your machine, and a merchant only appears in a feed once five or more people contributed.
 
 ## Spending insights
 

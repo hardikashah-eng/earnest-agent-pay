@@ -21,7 +21,8 @@ class Verdict:
 def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: Tier,
                    spent: float, is_new_merchant: bool, now: datetime,
                    merchant: MerchantCheck | None, history: History | None,
-                   high_risk_category: bool, confidence: dict | None) -> Verdict:
+                   high_risk_category: bool, confidence: dict | None,
+                   extra_deny: list[str] = (), extra_escalate: list[str] = ()) -> Verdict:
     # --- Deny: these are violations of what the user said ---
     deny: list[str] = []
     if mandate.deadline is not None and now.date() > mandate.deadline:
@@ -30,6 +31,7 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
         deny.append("merchant_blocked")
     if merchant is not None and merchant.status == "untrusted":
         deny.extend(merchant.reasons)
+    deny.extend(extra_deny)
     if mandate.allowed_categories and req.category not in mandate.allowed_categories:
         deny.append("category_not_allowed")
     if spent + req.amount > mandate.budget_max + 1e-9:
@@ -49,18 +51,23 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
         esc.append("tier_restricted")
     if mandate.approval in ("always", "shortlist"):
         esc.append(f"mandate_requires_approval:{mandate.approval}")
-    routine = (confidence is not None and "routine_repeat_purchase" in confidence["signals"]
-               and "routine_suspended" not in confidence["signals"])
+    signals = (confidence or {}).get("signals", [])
+    routine = (("routine_repeat_purchase" in signals or "standing_mandate" in signals)
+               and "routine_suspended" not in signals)
     if req.amount > tier.cap:
         esc.append("above_tier_cap")
     elif req.amount > tier.effective_approval_over(profile.autonomy) and not routine:
         # a high-confidence repeat of something the user bought and kept, at a price in
         # range, doesn't need the approval threshold; the tier cap still applies
         esc.append("above_approval_threshold")
+    cheaper = [s for s in (confidence or {}).get("signals", []) if s.startswith("cheaper_elsewhere:")]
+    if cheaper and profile.price_sensitivity >= 0.7:
+        esc.append(cheaper[0])
     if confidence is not None and confidence["score"] < profile.min_confidence:
         esc.append(f"low_confidence:{confidence['score']:.2f}")
     if merchant is not None and merchant.status == "suspicious":
         esc.extend(merchant.reasons)
+    esc.extend(extra_escalate)
     if high_risk_category:
         esc.append(f"high_risk_category:{req.category}")
     if history is not None and history.rejected_before:
@@ -77,9 +84,10 @@ def _base_decision(req: SpendRequest, mandate: Mandate, profile: Profile, tier: 
 def decide(req: SpendRequest, mandate: Mandate, profile: Profile, tier: Tier,
            spent: float, is_new_merchant: bool, now: datetime,
            merchant: MerchantCheck | None = None, history: History | None = None,
-           high_risk_category: bool = False, confidence: dict | None = None) -> Verdict:
+           high_risk_category: bool = False, confidence: dict | None = None,
+           extra_deny: list[str] = (), extra_escalate: list[str] = ()) -> Verdict:
     base = _base_decision(req, mandate, profile, tier, spent, is_new_merchant, now,
-                          merchant, history, high_risk_category, confidence)
+                          merchant, history, high_risk_category, confidence, extra_deny, extra_escalate)
     if not req.ask_first:
         return base
     # The agent asked before acting. Reward it only if asking was actually needed.

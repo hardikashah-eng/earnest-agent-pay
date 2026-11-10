@@ -122,6 +122,42 @@ The confidence score trusts the `item` the agent names, so earnest checks it:
 
 A mismatch also **suspends the agent's routine-repeat pass for 90 days** for that task type, and the false claim is dropped from the purchase history, so it can't build familiarity.
 
+### 3e. Learned weights and market prices
+
+**Learned weights.** Every scored purchase keeps its four factor scores. A verdict of *accepted* is a positive label; *rejected*, *disputed* or an item mismatch is negative. `earnest confidence fit` fits a logistic regression on those labels (L2-pulled toward the default weights), turns the positive coefficients into weights that sum to 1, and blends them with the defaults by `n / (n + 30)`. Nothing is learned below 10 verdicts or without both outcomes. The fit is kept only if it predicts held-out verdicts (5-fold Brier score) at least as well as the defaults; the report shows both, plus how often purchases in each confidence band were kept.
+
+**Market prices.** Quotes for the same item (product ID or same-item text match) from verified merchants in the last 7 days come from a price connector (`PriceSource`), a user CSV, or agents (`report_price`).
+- Another verified store ≥ 15% cheaper → signal `cheaper_elsewhere:<store>:<price>`, price factor capped at 0.6, and **escalated for frugal users** (`price_sensitivity` ≥ 0.7).
+- Within 2% of the best *non-agent* quote → `best_market_price`, price factor at least 0.85. Agent-reported quotes can lower confidence but never raise it.
+- No personal price history → the market median is the price reference.
+- Paying ≥ 20% over the lowest recent price the user paid, with ≥ 14 days to the deadline (or none) → `consider_waiting:<price>`.
+
+### 3f. Reorders, follow-ups, returns and disputes
+
+**Reorder prediction.** Items bought 3+ times (same product ID or same-item text, any source) get an interval (median gap), a regularity score, the usual store, a typical recent price and a next-due date.
+
+**Standing mandates** pre-approve a repeat purchase (`mandate.standing`: `item`, optional `product_id`, `max_unit_price`, `min_interval_days`). Requests against one are denied as violations if the item isn't the same (`standing:item_mismatch`), the unit price is over the limit (`standing:over_price`) or the last purchase of that item was too recent (`standing:too_soon`). The budget is per cycle. A valid standing purchase skips the approval-threshold check (check 9) like a routine repeat; the tier cap still applies.
+
+**Return checker.** Standard return windows for major merchants are data ([earnest/data/return_policies.json](../earnest/data/return_policies.json), with category exceptions and membership extensions). Every confidence block carries `returnable:<days>` (or `open_ended`, or `return_policy_unknown`). A mandate with `requires_returnable` escalates when the policy is unknown, and sets AP2 `requires_refundability`. After purchase, rejected or disputed items that can still be returned are flagged first, then windows closing within 7 days.
+
+**Follow-ups** (`earnest followup`): verdict reminders after 7 days; "did it arrive?" after 10 days without a matching order; price drops of 5%+ at the same store (newer orders or non-agent quotes) while returnable; subscription renewals within 5 days. Purchases that were **verified and kept past the return window** (30 days if unknown) are accepted automatically (profile `auto_accept_kept`, default on).
+
+**Dispute pack** (`earnest dispute <request_id>`): mandate, agent request and reason, decision and confidence, approvals, credential, item verification, verdict, matching orders, AP2 intent mandate and a timeline, as JSON with a SHA-256 and a Markdown summary with a suggested dispute reason.
+
+### 3g. Households
+
+A household groups users as `adult` or `child`:
+- Children's requests always escalate to an adult (`household:child_needs_guardian`); a child can't approve.
+- A child's `monthly_allowance` and the household `monthly_budget` cap approved spending this calendar month (deny: `household:over_allowance`, `household:over_monthly_budget`).
+- Purchases over `second_approval_over` need two different adults (`household:needs_two_adults`; after the first approval the request stays escalated with `awaiting_second_approval`).
+- Approval messages go to each adult with links bound to that adult.
+
+### 3h. Portable trust and shared reputation
+
+**Portable trust records.** `earnest trust export` issues a JWT signed with EdDSA (Ed25519) by the user's install, about one agent and task type: tier, purchase-count band, verified-item band, kept rate (one decimal), violations in the last 90 days, valid 30 days. No merchants, items, amounts or user identity beyond a pseudonymous key. On import the signature, issuer and expiry are checked, and the issuer must be one the importing user chose to trust. The head start is `trusted` → up to 20 points (`established`), `established` → 10, nothing with recent violations or a kept rate under 0.8, once per agent, task type and issuer.
+
+**Shared merchant reputation (opt-in).** A contribution holds per-merchant purchase and problem counts (item mismatch, rejected/disputed, never verified) with Laplace noise added locally (ε per count, default 1) under a one-time random id. An aggregator publishes merchants with ≥ 5 contributors. Imported feed entries with ≥ 10 contributors change decisions: an unknown merchant with problem rate ≥ 30% becomes **suspicious** (escalated); an unknown merchant with ≤ 5% over 50+ purchases gets authenticity 0.6; verified merchants only get a signal. The user's own lists still win.
+
 ## 4. Scoring
 
 | Event | Points |
