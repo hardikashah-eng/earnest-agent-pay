@@ -162,6 +162,26 @@ def respond_to_offer(item_id: str, platform: str, amount: float, offer_id: str =
 
 
 @mcp.tool()
+def prepare_shipping(sale_id: str, buy_label: bool = False) -> dict:
+    """For a sold item: box, packing steps, cheapest service (Media Mail for books), ship-by date and
+    drop-off. With buy_label, buys the cheapest eligible label through Shippo if it costs at most
+    25% of the sale; otherwise the user decides."""
+    try:
+        s = _sell().sale(sale_id)
+        if s["user_id"] != USER_ID:
+            return {"status": "invalid", "error": "unknown sale"}
+        return _sell().ship(sale_id, buy_label=buy_label, agent_id=AGENT_ID)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def selling_todo() -> list[dict]:
+    """Sales that need the user: what to ship and by when (most urgent first), and what to wrap up."""
+    return _sell().todo(USER_ID)
+
+
+@mcp.tool()
 def list_items_for_sale() -> list[dict]:
     """The user's items for sale, their price floors and where they're listed."""
     return _sell().items(USER_ID)

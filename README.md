@@ -176,7 +176,12 @@ python -m earnest sell quick --title "The Hobbit, paperback" --category books --
 python -m earnest sell link ebay --user user_demo     # with EBAY_TOKEN and EBAY_*_POLICY_ID / EBAY_MERCHANT_LOCATION_KEY set
 python -m earnest sell items --user user_demo
 python -m earnest sell sync                           # pick up sales eBay auto-accepted
+python -m earnest sell todo --user user_demo          # what to ship, by when
+python -m earnest sell ship <sale_id> --buy-label     # box, packing steps, cheapest label (SHIPPO_API_KEY)
+python -m earnest sell shipped <sale_id> --tracking 9400...
 ```
+
+Shipping is planned for you: the box, how to pack it, the cheapest eligible service (Media Mail for books), the ship-by date and where to drop it off. The label comes from the platform when it provides one, otherwise from Shippo.
 
 ## Spending insights
 

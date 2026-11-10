@@ -72,6 +72,7 @@ class SoldEvent:
     external_id: str                        # the listing's id
     amount: float
     order_ref: str
+    ship_to: dict | None = None             # buyer address when the platform shares it
 
 
 class ListingPlatform(Protocol):
@@ -205,8 +206,14 @@ class EbayInventoryAdapter:
         r = self.call("GET", "/sell/fulfillment/v1/order?filter=orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7D", None)
         out = []
         for o in r.get("orders", []):
+            step = ((o.get("fulfillmentStartInstructions") or [{}])[0].get("shippingStep") or {}).get("shipTo") or {}
+            addr = step.get("contactAddress") or {}
+            ship_to = {"name": step.get("fullName", ""), "street1": addr.get("addressLine1", ""),
+                       "street2": addr.get("addressLine2", ""), "city": addr.get("city", ""),
+                       "state": addr.get("stateOrProvince", ""), "zip": addr.get("postalCode", ""),
+                       "country": addr.get("countryCode", "US")} if addr else None
             for li in o.get("lineItems", []):
-                out.append(SoldEvent("ebay", li.get("sku", ""), float(li["total"]["value"]), o["orderId"]))
+                out.append(SoldEvent("ebay", li.get("sku", ""), float(li["total"]["value"]), o["orderId"], ship_to))
         return out
 
 

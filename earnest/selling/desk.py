@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from ..history import match_level
 from ..models import ValidationError
@@ -65,13 +65,14 @@ class SellMandate:
 
 class SellDesk:
     def __init__(self, gateway, platforms: dict | None = None, buyback: list | None = None,
-                 comp_sources: list | None = None):
+                 comp_sources: list | None = None, labels=None):
         self.gw = gateway
         self.db = gateway.ledger.db
         self.db.executescript(SCHEMA)
         self.platforms = platforms or {}
         self.buyback = buyback or []
         self.comp_sources = comp_sources or []
+        self.labels = labels            # shipping.ShippoLabels or None
         gateway.token_handlers["sm_"] = (self._resolve_token, self._describe_token)
 
     # ---------------------------------------------------------------- storage helpers
@@ -301,7 +302,7 @@ class SellDesk:
 
     # ---------------------------------------------------------------- sales
     def record_sale(self, item_id: str, platform: str, amount: float, order_ref: str | None = None,
-                    agent_id: str | None = None) -> dict:
+                    agent_id: str | None = None, ship_to: dict | None = None) -> dict:
         it = self.item(item_id)
         if it.status in ("sold", "shipped", "done"):
             raise ValidationError("item already sold")
@@ -327,10 +328,14 @@ class SellDesk:
                 ended.append({"platform": l["platform"], "status": new})
             with self.db:
                 self.db.execute("UPDATE sell_listings SET status = ? WHERE id = ?", (new, l["id"]))
+        from .shipping import plan as ship_plan
+        sp = ship_plan(it.category, platform, now.date(), label_api=self.labels is not None)
         with self.db:
             self.db.execute("INSERT INTO sell_sales VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (sale_id, item_id, it.user_id, platform, amount, order_ref, "sold", lister,
-                             json.dumps({"floor": m.floor if m else None}), now.isoformat()))
+                             json.dumps({"floor": m.floor if m else None, "ship_to": ship_to,
+                                         "plan": sp.to_dict(), "events": [["sold", now.isoformat()]]}),
+                             now.isoformat()))
         it.status = "sold"
         self._save_item(it)
         if m:
@@ -339,7 +344,7 @@ class SellDesk:
         if lister and m and amount >= m.floor - 1e-9:
             self.gw.ledger.add_points(it.user_id, lister, TASK, "sold_at_or_above_floor", SALE_POINTS, sale_id, now)
         out = {"sale_id": sale_id, "item_id": item_id, "platform": platform, "amount": amount,
-               "other_listings": ended}
+               "other_listings": ended, "ship_by": sp.ship_by.isoformat(), "shipping": sp.to_dict()}
         manual = [e for e in ended if e["platform"] not in self.platforms]
         if manual:
             out["remove_manually"] = [e["platform"] for e in manual]
@@ -357,10 +362,110 @@ class SellDesk:
                                           (ev.external_id,)).fetchone()
                 if row:
                     try:
-                        out.append(self.record_sale(row["item_id"], name, ev.amount, ev.order_ref))
+                        out.append(self.record_sale(row["item_id"], name, ev.amount, ev.order_ref,
+                                                    ship_to=ev.ship_to))
                     except ValidationError:
                         pass
         return out
+
+    # ---------------------------------------------------------------- shipping & follow-through
+    LABEL_MAX_SHARE = 0.25     # an agent may buy a label costing up to 25% of the sale; more asks the user
+    STATUSES = ("sold", "label_ready", "shipped", "delivered", "completed", "cancelled")
+
+    def set_ship_from(self, user_id: str, address: dict) -> None:
+        for k in ("name", "street1", "city", "state", "zip"):
+            if not address.get(k):
+                raise ValidationError(f"ship-from address needs {k}")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)",
+                            (f"ship_from:{user_id}", json.dumps({"country": "US", **address})))
+
+    def ship_from(self, user_id: str) -> dict | None:
+        row = self.db.execute("SELECT value FROM settings WHERE name = ?", (f"ship_from:{user_id}",)).fetchone()
+        return json.loads(row["value"]) if row else None
+
+    def sale(self, sale_id: str) -> dict:
+        r = self.db.execute("SELECT * FROM sell_sales WHERE id = ?", (sale_id,)).fetchone()
+        if r is None:
+            raise ValidationError(f"unknown sale: {sale_id}")
+        return {**dict(r), "data": json.loads(r["data"])}
+
+    def _update_sale(self, sale_id: str, status: str, **changes) -> dict:
+        s = self.sale(sale_id)
+        d = s["data"]
+        d.update(changes)
+        d.setdefault("events", []).append([status, self._now().isoformat()])
+        with self.db:
+            self.db.execute("UPDATE sell_sales SET status = ?, data = ? WHERE id = ?", (status, json.dumps(d), sale_id))
+        return self.sale(sale_id)
+
+    def ship(self, sale_id: str, weight_oz: float | None = None, ship_to: dict | None = None, buy_label: bool = False,
+             agent_id: str | None = None) -> dict:
+        """The shipping plan for a sale; with a label API and buy_label, buys the cheapest eligible label."""
+        from .shipping import plan as ship_plan, profile
+        s = self.sale(sale_id)
+        if s["status"] not in ("sold", "label_ready"):
+            raise ValidationError(f"sale is {s['status']}")
+        it = self.item(s["item_id"])
+        sp = ship_plan(it.category, s["platform"], datetime.fromisoformat(s["at"]).date(), weight_oz,
+                       self.labels is not None)
+        out = {"sale_id": sale_id, "plan": sp.to_dict()}
+        if not buy_label or sp.label_from != "shippo":
+            self._update_sale(sale_id, s["status"], plan=sp.to_dict())
+            return out
+        to = ship_to or s["data"].get("ship_to")
+        frm = self.ship_from(it.user_id)
+        if not (to and frm):
+            raise ValidationError("buying a label needs the buyer's address and your ship-from address "
+                                  "(earnest sell address ...)")
+        rates = self.labels.rates(frm, to, sp.dims_in, sp.weight_oz)
+        rate = self.labels.cheapest(rates, bool(profile(it.category).get("media_mail")))
+        if rate is None:
+            raise ValidationError("no shipping rates returned for this package")
+        cost = float(rate["amount"])
+        if agent_id and cost > self.LABEL_MAX_SHARE * s["amount"]:
+            out.update(needs_user=f"cheapest label is ${cost:.2f}, over 25% of the ${s['amount']:.2f} sale")
+            return out
+        label = self.labels.buy(rate["object_id"])
+        label.update(cost=cost, service=(rate.get("servicelevel") or {}).get("name"), carrier=rate.get("provider"))
+        self._update_sale(sale_id, "label_ready", plan=sp.to_dict(), label=label)
+        out["label"] = label
+        return out
+
+    def mark(self, sale_id: str, status: str, tracking: str | None = None) -> dict:
+        if status not in ("shipped", "delivered", "completed", "cancelled"):
+            raise ValidationError("status must be shipped, delivered, completed or cancelled")
+        s = self.sale(sale_id)
+        order = self.STATUSES.index
+        if s["status"] in ("completed", "cancelled") or (status != "cancelled" and order(status) <= order(s["status"])):
+            raise ValidationError(f"sale is already {s['status']}")
+        changes = {"tracking": tracking} if tracking else {}
+        if status == "cancelled":
+            it = self.item(s["item_id"])
+            it.status = "valued"
+            self._save_item(it)
+        return self._update_sale(sale_id, status, **changes)
+
+    def todo(self, user_id: str) -> list[dict]:
+        """What needs doing for sales, most urgent first."""
+        today = self._now().date()
+        out = []
+        for s in self.sales(user_id):
+            d = json.loads(s["data"]) if isinstance(s["data"], str) else s["data"]
+            title = self.item(s["item_id"]).title
+            ship_by = date.fromisoformat(d["plan"]["ship_by"])
+            if s["status"] in ("sold", "label_ready"):
+                days = (ship_by - today).days
+                urgency = 0 if days < 0 else 1 if days <= 1 else 2
+                what = "overdue: ship today" if days < 0 else f"ship by {ship_by.isoformat()}"
+                step = ("drop it off" if s["status"] == "label_ready"
+                        else "pack it and get the label: " + d["plan"]["label_note"])
+                out.append({"sale_id": s["id"], "item": title, "urgency": urgency, "todo": f"{what}; {step}",
+                            "package": d["plan"]["package"], "packing": d["plan"]["packing"]})
+            elif s["status"] == "delivered":
+                out.append({"sale_id": s["id"], "item": title, "urgency": 3,
+                            "todo": "delivered; mark completed once the payout arrives"})
+        return sorted(out, key=lambda t: t["urgency"])
 
     def sales(self, user_id: str) -> list[dict]:
         return [dict(r) for r in self.db.execute("SELECT * FROM sell_sales WHERE user_id = ? ORDER BY at", (user_id,))]

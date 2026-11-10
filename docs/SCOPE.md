@@ -73,7 +73,8 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 ## Selling (v0.4)
 
 - Done: photo-to-value (agent identifies, earnest prices from comps and buyback quotes), sell mandates with floors and one-tap approval, eBay listings with Best Offer auto-accept at the floor, buyback interface, copy-paste kits for platforms without APIs, cross-listing protection.
-- Next: shipping (packaging, cheapest service, labels) and sale follow-through; real buyback vendor connectors; image hosting for eBay photos.
+- Done: shipping plans (package, packing, cheapest eligible service, ship-by, drop-off), Shippo labels with an agent spend cap, sale lifecycle and to-dos.
+- Next: real buyback vendor connectors; image hosting for eBay photos; tracking updates from carriers.
 
 ## Next (v0.2+)
 

@@ -148,13 +148,15 @@ def sell_desk_from_env(gw: Gateway):
         comps.append(EbayComps(t, sold_access=os.environ.get("EBAY_SOLD_ACCESS") == "1"))
         if os.environ.get("EBAY_PAYMENT_POLICY_ID"):
             platforms["ebay"] = EbayInventoryAdapter(t, EbayConfig.from_env())
-    return SellDesk(gw, platforms, [], comps)
+    from .selling.shipping import ShippoLabels
+    return SellDesk(gw, platforms, [], comps, ShippoLabels.from_env())
 
 
 def _sell_cmd(args, gw: Gateway, ap) -> int:
     desk = sell_desk_from_env(gw)
     a = args.action
-    need_item = {"value", "floor", "go", "list", "offer", "sold", "kit"}
+    need_item = {"value", "floor", "go", "list", "offer", "sold", "kit", "ship", "shipped", "delivered", "done",
+                 "cancel"}
     if a in need_item and not args.item:
         ap.error(f"sell {a} needs an item id")
     if a == "quick":
@@ -189,6 +191,17 @@ def _sell_cmd(args, gw: Gateway, ap) -> int:
         print(f"linked {args.platform}")
     elif a == "sync":
         _print(desk.sync())
+    elif a == "ship":
+        _print(desk.ship(args.item, args.weight_oz, buy_label=args.buy_label))
+    elif a in ("shipped", "delivered", "done", "cancel"):
+        status = {"done": "completed", "cancel": "cancelled"}.get(a, a)
+        _print(desk.mark(args.item, status, args.tracking))
+    elif a == "todo":
+        _print(desk.todo(args.user))
+    elif a == "address":
+        desk.set_ship_from(args.user, {"name": args.name, "street1": args.street, "city": args.city,
+                                       "state": args.state, "zip": args.zip})
+        print("saved your ship-from address (kept in your local earnest database)")
     return 0
 
 
@@ -316,8 +329,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--k", type=int, default=5, help="aggregate: minimum contributors per merchant")
     p = sub.add_parser("sell", help="sell things: photo + price range -> listed or sold")
     p.add_argument("action", choices=["quick", "new", "value", "floor", "go", "list", "kit", "offer", "sold",
-                                      "items", "sales", "link", "sync"])
-    p.add_argument("item", nargs="?", help="item id (sell_...)")
+                                      "items", "sales", "link", "sync", "ship", "shipped", "delivered", "done",
+                                      "cancel", "todo", "address"])
+    p.add_argument("item", nargs="?", help="item id (sell_...) or, for shipping actions, sale id (sale_...)")
+    p.add_argument("--weight-oz", type=float, help="ship: actual weight, if you weighed it")
+    p.add_argument("--buy-label", action="store_true", help="ship: buy the cheapest label (needs SHIPPO_API_KEY)")
+    p.add_argument("--tracking")
+    p.add_argument("--name")
+    p.add_argument("--street")
+    p.add_argument("--city")
+    p.add_argument("--state")
+    p.add_argument("--zip")
     p.add_argument("--user", default="user_demo")
     p.add_argument("--title", help="what it is, e.g. 'The Hobbit, 1st Ballantine paperback'")
     p.add_argument("--photo", action="append", default=[], help="photo path or https URL (repeatable)")
