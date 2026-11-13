@@ -7,7 +7,10 @@
   "required": ["request_id", "status", "reasons", "tier"],
   "properties": {
     "request_id": { "type": "string" },
-    "status": { "type": "string", "enum": ["approved", "denied", "escalated"] },
+    "status": {
+      "type": "string", "enum": ["approved", "denied", "escalated", "shadow"],
+      "description": "shadow: the agent is in read-only shadow mode (SPEC.md 3j); `shadow.would_be` is the real decision and nothing is paid."
+    },
     "reasons": { "type": "array", "items": { "type": "string" } },
     "tier": { "type": "string", "enum": ["restricted", "new", "established", "trusted"] },
     "credential": {
@@ -22,7 +25,31 @@
         "expires_at": { "type": "string", "format": "date-time" },
         "single_use": { "type": "boolean" },
         "backend": { "type": "string" },
-        "item_lock": { "type": "string", "description": "The item the agent claimed. When the merchant sends cart line items, the card only pays for this item (SPEC.md 3d)." }
+        "item_lock": { "type": "string", "description": "The item the agent claimed. When the merchant sends cart line items, the card only pays for this item (SPEC.md 3d)." },
+        "account": { "type": "string", "description": "The agent account (user:agent) the card is drawn from (SPEC.md 3i)." }
+      }
+    },
+    "payment": {
+      "type": "object",
+      "description": "Present when an approved purchase is paid from an agent account (SPEC.md 3i).",
+      "required": ["method", "funding_id", "pay_with", "amount", "remaining"],
+      "properties": {
+        "method": { "type": "string", "enum": ["allowance", "gift_card", "prepaid"] },
+        "funding_id": { "type": "string" },
+        "pay_with": { "type": "string", "description": "Plain-language source, e.g. 'target.com gift card ending 4417'. Never a card number or code." },
+        "amount": { "type": "number" },
+        "remaining": { "type": "number", "description": "What's left on that source after this purchase." },
+        "note": { "type": "string" }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "description": "Present when status is shadow (SPEC.md 3j).",
+      "required": ["would_be", "card"],
+      "properties": {
+        "would_be": { "type": "string", "enum": ["approved", "denied", "escalated"] },
+        "card": { "type": "string", "description": "The card the agent is learning from." },
+        "violation": { "type": "boolean", "description": "Whether the would-be decision was a violation. Shadow mode never scores it." }
       }
     },
     "confidence": {

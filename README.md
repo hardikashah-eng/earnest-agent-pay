@@ -68,7 +68,7 @@ Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config
 }
 ```
 
-The agent gets four tools: `list_mandates`, `get_limits`, `check_merchant` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
+The agent gets five core tools: `list_mandates`, `get_limits`, `get_account`, `check_merchant` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
 
 ## Merchant trust and purchase confidence
 
@@ -134,6 +134,44 @@ export EARNEST_NOTIFY="slack:https://hooks.slack.com/...,ntfy:https://ntfy.sh/my
 export EARNEST_APPROVAL_URL=https://earnest.my-tunnel.example
 python -m earnest serve
 ```
+
+## Agent accounts: the most it can ever spend
+
+Give an agent its own balance. Whatever goes wrong, it can't spend more than what's in it.
+
+```bash
+python -m earnest account open --user user_demo --agent agent_shopper --allowance 25 --topup-to 25 --every-days 7
+python -m earnest account add-card --user user_demo --agent agent_shopper --kind gift_card \
+    --merchant target.com --balance 50 --last4 4417      # a Target gift card in the agent's Target account
+python -m earnest account statement --user user_demo --agent agent_shopper
+# shopper: $37.20 left, 3 purchase(s) in 30 days: all kept
+python -m earnest account freeze --user user_demo      # stop every agent at once
+```
+
+- **Allowance:** each approved purchase is still a single-use, merchant-locked card, drawn from the allowance.
+- **Store gift cards:** load one into the agent's own store account. It only pays at that store, the store enforces the balance, and earnest keeps the last 4 digits, never the code. A purchase there is approved as "pay with target.com gift card ending 4417".
+- **Prepaid cards:** work anywhere, so earnest's rules are the only merchant check.
+
+The allowance can't hold more than the agent's trust tier allows ($25 new, $200 established, $1,000 trusted). If the tier falls, the excess comes back automatically. If it rises, `earnest account offers` asks you before anything goes up. A violation, a wrong item or a dispute **freezes** the account and returns the allowance. earnest never holds money: the allowance is a limit on your own card, and gift cards stay with the store. Rules: [spec/SPEC.md](spec/SPEC.md) section 3i.
+
+## Shadow mode: watch it before you trust it
+
+Let an agent learn from one of your cards, read-only, before it spends anything.
+
+```bash
+python -m earnest import statement.csv --user user_demo --card "Visa 4417"
+python -m earnest shadow profile --user user_demo --card "Visa 4417"   # how you spend: stores, sizes, regulars
+python -m earnest shadow replay --user user_demo --card "Visa 4417"    # what earnest would have done with your own purchases
+python -m earnest shadow start --user user_demo --agent agent_shopper --card "Visa 4417"
+python -m earnest shadow match --user user_demo     # its proposals that you went on to buy
+python -m earnest shadow pending --user user_demo   # then: earnest shadow review <id> yes|no
+python -m earnest shadow report --user user_demo --agent agent_shopper
+python -m earnest shadow live --user user_demo --agent agent_shopper --allowance 50
+```
+
+In shadow mode the agent's requests get earnest's real decision (`status: shadow`, `shadow.would_be`), but never a card, never money and never trust points from the decision itself. When your card shows you bought what it proposed, that's a match, worth a little trust, capped so shadow mode alone can't reach `established`. The report says when it's ready: enough reviews where earnest agreed with you, or enough matches, and no would-be violations. Going live opens an agent account, so its first real spending is capped from day one.
+
+On the sample statements with the default profile, `replay` shows what earning trust changes: a `new` agent would have bought 22% of the last 60 days' purchases without asking, an `established` one 97%. Rules: [spec/SPEC.md](spec/SPEC.md) section 3j.
 
 ## After the purchase, and for the whole household
 
@@ -254,6 +292,8 @@ earnest/           the gateway
   models.py        spec objects + validation
   rules.py         decision procedure (approve / deny / escalate)
   scoring.py       trust points and decay
+  accounts.py      agent accounts: allowance, gift cards, prepaid cards
+  shadow.py        shadow mode: card profile, matching, readiness
   ledger.py        SQLite ledger
   gateway.py       ties it together
   backends/mock.py simulated scoped, expiring cards

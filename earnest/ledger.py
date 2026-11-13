@@ -70,6 +70,30 @@ CREATE TABLE IF NOT EXISTS memberships (
     user_id TEXT NOT NULL, merchant TEXT NOT NULL, program TEXT NOT NULL, at TEXT NOT NULL,
     PRIMARY KEY (user_id, merchant)
 );
+CREATE TABLE IF NOT EXISTS agent_accounts (
+    user_id TEXT NOT NULL, agent_id TEXT NOT NULL, status TEXT NOT NULL, status_reason TEXT,
+    max_allowance REAL, topup_to REAL, topup_every_days INTEGER, last_topup TEXT, created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, agent_id)
+);
+CREATE TABLE IF NOT EXISTS account_funding (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, agent_id TEXT NOT NULL, kind TEXT NOT NULL,
+    merchant TEXT, last4 TEXT, label TEXT, active INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS account_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+    funding_id TEXT NOT NULL, kind TEXT NOT NULL, amount REAL NOT NULL, request_id TEXT, note TEXT,
+    at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS account_entries_agent ON account_entries (user_id, agent_id, at);
+CREATE TABLE IF NOT EXISTS shadow_enrollments (
+    user_id TEXT NOT NULL, agent_id TEXT NOT NULL, card TEXT NOT NULL, started_at TEXT NOT NULL,
+    ended_at TEXT, PRIMARY KEY (user_id, agent_id)
+);
+CREATE TABLE IF NOT EXISTS shadow_reviews (request_id TEXT PRIMARY KEY, would_buy INTEGER NOT NULL, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS shadow_matches (
+    request_id TEXT PRIMARY KEY, tx_id TEXT NOT NULL, tx_date TEXT NOT NULL, tx_amount REAL NOT NULL,
+    at TEXT NOT NULL
+);
 """
 
 
@@ -430,6 +454,157 @@ class Ledger:
 
     def has_outcome(self, request_id: str) -> bool:
         return self.db.execute("SELECT 1 FROM outcomes WHERE request_id = ?", (request_id,)).fetchone() is not None
+
+    # --- agent accounts (spec section 3i) ---
+    def put_account(self, user_id: str, agent_id: str, max_allowance: float | None, topup_to: float | None,
+                    topup_every_days: int | None, at: datetime) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO agent_accounts (user_id, agent_id, status, max_allowance, topup_to, topup_every_days, "
+                "created_at) VALUES (?, ?, 'active', ?, ?, ?, ?) ON CONFLICT (user_id, agent_id) DO UPDATE SET "
+                "max_allowance = excluded.max_allowance, topup_to = excluded.topup_to, "
+                "topup_every_days = excluded.topup_every_days",
+                (user_id, agent_id, max_allowance, topup_to, topup_every_days, at.isoformat()))
+            self.db.execute(
+                "INSERT OR IGNORE INTO account_funding VALUES (?, ?, ?, 'allowance', NULL, NULL, NULL, 1, ?)",
+                (f"allowance:{user_id}:{agent_id}", user_id, agent_id, at.isoformat()))
+
+    def get_account(self, user_id: str, agent_id: str) -> dict | None:
+        row = self.db.execute("SELECT * FROM agent_accounts WHERE user_id = ? AND agent_id = ?",
+                              (user_id, agent_id)).fetchone()
+        return dict(row) if row else None
+
+    def accounts(self, user_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM agent_accounts WHERE user_id = ? ORDER BY agent_id", (user_id,))]
+
+    def update_account(self, user_id: str, agent_id: str, **fields) -> None:
+        allowed = {"status", "status_reason", "max_allowance", "last_topup"}
+        if not fields or set(fields) - allowed:
+            raise ValueError(f"can only update {sorted(allowed)}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self.db:
+            self.db.execute(f"UPDATE agent_accounts SET {sets} WHERE user_id = ? AND agent_id = ?",
+                            (*fields.values(), user_id, agent_id))
+
+    def add_funding(self, funding_id: str, user_id: str, agent_id: str, kind: str, merchant: str | None,
+                    last4: str | None, label: str | None, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO account_funding VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                            (funding_id, user_id, agent_id, kind, merchant, last4, label, at.isoformat()))
+
+    def set_funding_active(self, funding_id: str, active: bool) -> None:
+        with self.db:
+            self.db.execute("UPDATE account_funding SET active = ? WHERE id = ?", (int(active), funding_id))
+
+    def funding(self, user_id: str, agent_id: str, active_only: bool = True) -> list[dict]:
+        q = ("SELECT f.*, COALESCE((SELECT SUM(e.amount) FROM account_entries e WHERE e.funding_id = f.id), 0) "
+             "AS balance FROM account_funding f WHERE f.user_id = ? AND f.agent_id = ?")
+        if active_only:
+            q += " AND f.active = 1"
+        return [dict(r) for r in self.db.execute(q + " ORDER BY f.created_at, f.id", (user_id, agent_id))]
+
+    def add_entry(self, user_id: str, agent_id: str, funding_id: str, kind: str, amount: float,
+                  request_id: str | None, note: str | None, at: datetime) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO account_entries (user_id, agent_id, funding_id, kind, amount, request_id, note, at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, agent_id, funding_id, kind, round(amount, 2), request_id, note, at.isoformat()))
+
+    def entries(self, user_id: str, agent_id: str, since_iso: str = "0000-01-01") -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT funding_id, kind, amount, request_id, note, at FROM account_entries "
+            "WHERE user_id = ? AND agent_id = ? AND at >= ? ORDER BY id", (user_id, agent_id, since_iso))]
+
+    def entries_for_request(self, request_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT user_id, agent_id, funding_id, kind, amount, at FROM account_entries WHERE request_id = ? "
+            "ORDER BY id", (request_id,))]
+
+    def holds(self, user_id: str) -> list[dict]:
+        """Allowance holds for virtual cards, with the request's decision (for the credential)."""
+        return [dict(r) for r in self.db.execute(
+            "SELECT e.agent_id, e.funding_id, e.amount, e.request_id, r.decision FROM account_entries e "
+            "JOIN requests r ON r.id = e.request_id WHERE e.user_id = ? AND e.kind = 'hold' ORDER BY e.id",
+            (user_id,))]
+
+    def task_types(self, user_id: str, agent_id: str) -> list[str]:
+        return [r["task_type"] for r in self.db.execute(
+            "SELECT task_type FROM trust WHERE user_id = ? AND agent_id = ? ORDER BY task_type", (user_id, agent_id))]
+
+    def points_of_kind(self, user_id: str, agent_id: str, task_type: str, kind: str) -> float:
+        row = self.db.execute(
+            "SELECT COALESCE(SUM(points), 0) AS s FROM events WHERE user_id = ? AND agent_id = ? AND task_type = ? "
+            "AND kind = ?", (user_id, agent_id, task_type, kind)).fetchone()
+        return float(row["s"])
+
+    # --- shadow mode (spec section 3j) ---
+    def put_shadow(self, user_id: str, agent_id: str, card: str, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO shadow_enrollments VALUES (?, ?, ?, ?, NULL)",
+                            (user_id, agent_id, card, at.isoformat()))
+
+    def end_shadow(self, user_id: str, agent_id: str, at: datetime) -> bool:
+        with self.db:
+            return self.db.execute(
+                "UPDATE shadow_enrollments SET ended_at = ? WHERE user_id = ? AND agent_id = ? AND ended_at IS NULL",
+                (at.isoformat(), user_id, agent_id)).rowcount > 0
+
+    def shadow_enrollment(self, user_id: str, agent_id: str) -> dict | None:
+        row = self.db.execute("SELECT * FROM shadow_enrollments WHERE user_id = ? AND agent_id = ?",
+                              (user_id, agent_id)).fetchone()
+        return dict(row) if row else None
+
+    def shadow_requests(self, user_id: str, agent_id: str | None = None) -> list[dict]:
+        q = ("SELECT r.*, sr.would_buy, sm.tx_id, sm.tx_date, sm.tx_amount FROM requests r "
+             "LEFT JOIN shadow_reviews sr ON sr.request_id = r.id "
+             "LEFT JOIN shadow_matches sm ON sm.request_id = r.id "
+             "WHERE r.user_id = ? AND r.status = 'shadow'")
+        args: list = [user_id]
+        if agent_id is not None:
+            q += " AND r.agent_id = ?"
+            args.append(agent_id)
+        return [dict(r) for r in self.db.execute(q + " ORDER BY r.created_at", args)]
+
+    def put_shadow_review(self, request_id: str, would_buy: bool, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO shadow_reviews VALUES (?, ?, ?)",
+                            (request_id, int(would_buy), at.isoformat()))
+
+    def put_shadow_match(self, request_id: str, tx_id: str, tx_date: str, tx_amount: float, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO shadow_matches VALUES (?, ?, ?, ?, ?)",
+                            (request_id, tx_id, tx_date, tx_amount, at.isoformat()))
+
+    def matched_tx_ids(self, user_id: str) -> set[str]:
+        return {r["tx_id"] for r in self.db.execute(
+            "SELECT sm.tx_id FROM shadow_matches sm JOIN requests r ON r.id = sm.request_id WHERE r.user_id = ?",
+            (user_id,))}
+
+    def card_transactions(self, user_id: str, card: str | None) -> list[dict]:
+        """Imported statement rows for one card (all cards when `card` is None), oldest first."""
+        has = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transactions'").fetchone()
+        if not has:
+            return []
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(transactions)")}
+        q, args = "SELECT * FROM transactions WHERE user_id = ?", [user_id]
+        if card is not None:
+            if "card" not in cols:
+                return []
+            q += " AND card = ?"
+            args.append(card)
+        return [dict(r) for r in self.db.execute(q + " ORDER BY date, id", args)]
+
+    def cards(self, user_id: str) -> list[dict]:
+        has = self.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transactions'").fetchone()
+        if not has or "card" not in {r["name"] for r in self.db.execute("PRAGMA table_info(transactions)")}:
+            return []
+        return [dict(r) for r in self.db.execute(
+            "SELECT card, COUNT(*) AS transactions, MIN(date) AS first, MAX(date) AS last FROM transactions "
+            "WHERE user_id = ? AND card IS NOT NULL GROUP BY card ORDER BY card", (user_id,))]
 
     # --- trust ---
     def score(self, user_id: str, agent_id: str, task_type: str, now: datetime) -> float:

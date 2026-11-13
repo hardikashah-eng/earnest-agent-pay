@@ -52,7 +52,7 @@ Checks run in this order. The first group **denies** the request and counts as a
 12. The user **rejected or disputed** the same or a similar item from this merchant before (section 3b).
 13. Merchant is new to this user and the tier doesn't allow new merchants (profile `novelty` ≥ 0.8 also allows them). A merchant counts as known if the user has bought there through earnest **or** it appears in their imported card statements. Verified and user-trusted merchants skip this check, but the `no_new_merchants` hard rule still applies to them.
 
-**Approve** otherwise: the backend issues a credential capped at `amount`, locked to the merchant, expiring after the tier's lifetime. It's single-use if the tier says so or if profile `privacy` ≥ 0.8.
+**Approve** otherwise: the backend issues a credential capped at `amount`, locked to the merchant, expiring after the tier's lifetime. It's single-use if the tier says so or if profile `privacy` ≥ 0.8. An agent with an **account** (3i) pays from it instead, and escalates when nothing in it covers the amount; a frozen account is denied (`account_frozen`, unscored). An agent in **shadow mode** (3j) gets the decision as `shadow.would_be` and nothing is paid.
 
 9b. Purchase confidence is below the profile's `min_confidence` (section 3c).
 
@@ -158,6 +158,45 @@ A household groups users as `adult` or `child`:
 
 **Shared merchant reputation (opt-in).** A contribution holds per-merchant purchase and problem counts (item mismatch, rejected/disputed, never verified) with Laplace noise added locally (ε per count, default 1) under a one-time random id. An aggregator publishes merchants with ≥ 5 contributors. Imported feed entries with ≥ 10 contributors change decisions: an unknown merchant with problem rate ≥ 30% becomes **suspicious** (escalated); an unknown merchant with ≤ 5% over 50+ purchases gets authenticity 0.6; verified merchants only get a signal. The user's own lists still win.
 
+### 3i. Agent accounts
+
+An agent account caps the most an agent can ever spend, whatever happens. It belongs to one `(user, agent)` and holds money from three kinds of **funding source**:
+
+| Source | Pays with | Where | What enforces the cap |
+|---|---|---|---|
+| `allowance` | a single-use virtual card from the payment backend, as without an account | the approved merchant | earnest holds the amount from the allowance when it issues the card |
+| `gift_card` | the store gift card the user loaded into the **agent's own store account**; no card is issued | that store only | the store: the card can't spend more than its balance, or anywhere else |
+| `prepaid` | a prepaid Visa / Mastercard the user gave the agent | any store | the card's balance; earnest's rules are the only merchant check |
+
+earnest never holds money. The allowance is a limit on the user's own card program. Gift and prepaid cards stay with the store or issuer; earnest records only the last 4 digits and the balance, never a card number or code. The user tops up and adds cards. Agents can't, and agents still can't *buy* gift cards (a high-risk category, check 11).
+
+**Which source pays.** For an approved request, the first that covers the whole amount: a gift card for this merchant (the smallest balance that covers it), then the allowance, then a prepaid card (smallest first). The response carries a `payment` block (`method`, `funding_id`, `pay_with`, `amount`, `remaining`). If no source covers it, the request escalates with `account:insufficient_balance:<most any one source could pay here>`. Approving it then fails until the user tops up or adds a card, and nothing is recorded.
+
+**Allowance ceiling.** The allowance can hold at most `min(approved, tier ceiling)`. The tier ceiling is the highest per-purchase cap among the agent's tiers across task types (`new` $25, `established` $200, `trusted` $1,000; `new` if it has no score yet). `approved` defaults to the tier ceiling when the account is opened.
+- **Decreases are automatic.** When the tier falls, the ceiling falls, and any allowance above it is returned (entry `ceiling`).
+- **Increases need the user.** When the tier rises above `approved`, `earnest account offers` lists a raise and `earnest account raise` accepts it. Nothing rises on its own.
+- Top-ups beyond the ceiling are capped and say so. Gift and prepaid cards aren't capped, but tier caps and approval thresholds still apply to each purchase.
+
+**Refills.** An account can refill its allowance to `topup_to` every `topup_every_days` (`earnest account refill`, scheduled daily), never above the ceiling.
+
+**Freezing.** A violation, an item mismatch (3d) or a disputed outcome **freezes** the account and returns the allowance to the user (entry `sweep`). `earnest account freeze --user U` freezes every agent at once. A frozen account's requests are denied with `account_frozen`, unscored. Gift and prepaid cards can't be swept, so the freeze lists them for the user to take off the agent's store accounts. Only the user unfreezes.
+
+**Holds, releases and refunds.** An allowance purchase holds the full amount. When the card expires having spent less, `earnest account settle` releases the rest (with backends that report card spend; the mock backend does). `earnest account refund <request_id> [--amount]` credits a return to the source that paid. `earnest account set-balance` corrects a card's balance to what the store shows.
+
+**Statement.** `earnest account statement` gives a one-line summary ("shopper: $37.20 left, 3 purchase(s) in 30 days: all kept") and every entry: `topup`, `load`, `hold`, `spend`, `release`, `refund`, `adjust`, `ceiling`, `sweep`.
+
+### 3j. Shadow mode
+
+Shadow mode lets an agent prove itself before it spends anything, using one of the user's own cards.
+
+1. **Label a card's statements** at import: `earnest import FILE --user U --card "Visa 4417"` (or `sync --card`). Re-importing an unlabelled statement with `--card` labels the rows already stored.
+2. **Learn from the card** (`earnest shadow profile`): purchase count, monthly spend, purchase sizes (median, p75, p90), top merchants with typical and largest amounts, categories, and **regulars** (3+ purchases at a steady interval). It also gives **suggestions**: an approval threshold near p75, a monthly budget near the median month, a starting allowance near p90, known merchants and standing restocks. Nothing is applied; the user decides. The card's purchases also count as purchase history for confidence (3b), as all imported statements do.
+3. **Replay** (`earnest shadow replay`): for each of the card's purchases in a window, what earnest would have decided if an agent had requested it. Each purchase is judged only on what was known **the day before** it. Output: how many would have gone through automatically, asked, or been blocked, the top reasons, examples, and the automatic share at each tier (`new`, `established`, `trusted`). Nothing is recorded.
+4. **Shadow an agent** (`earnest shadow start --agent A --card C`; needs transactions for that card). The agent's spend requests get the full decision, recorded with status `shadow` and `shadow.would_be`. It gets **no credential, no payment from its account, no trust points from the decision, and no notifications**. A would-be violation costs nothing, but blocks graduation for 30 days.
+5. **Matches** (`earnest shadow match`): a proposal matches a later card purchase at the same merchant (canonical keys), within 15% or $2 of the amount, on the day of the proposal or up to 14 days after. Each card purchase matches at most one proposal. A match of a proposal earnest wouldn't have denied earns +1 point (`shadow_match`), **capped at 15 points in total** per task type, so shadow mode alone never reaches `established`.
+6. **Reviews** (`earnest shadow pending`, `earnest shadow review <id> yes|no`): would you have let it buy this? It agrees when earnest would have approved and you say yes, or would have denied and you say no. Would-be escalations count as `asked`, neither agreeing nor disagreeing.
+7. **Readiness** (`earnest shadow report`): ready with no would-be violations in the last 30 days and either 10+ reviews with 90%+ agreement, or 5+ matches. When ready, the report suggests `earnest shadow live --allowance X`, where X is the card's suggested starting allowance capped at the agent's tier ceiling. `live` ends shadow mode and opens (or tops up) an agent account, so the agent's first real spending is capped from day one.
+
 ## 4. Scoring
 
 | Event | Points |
@@ -171,6 +210,7 @@ A household groups users as `adult` or `child`:
 | Efficiency (accepted only, non-gift, with `benchmark_price`) | `clamp(4 × saving × price_sensitivity, −3, +3)` where `saving = (benchmark − amount) / benchmark` |
 | Budget fit (accepted gift with `budget.min`, amount in [min, max]) | +1 |
 | Timeliness (accepted) | on time: `+1 × (1 − price_sensitivity)`; late: `−2 × (1 − price_sensitivity)` |
+| Shadow match (3j): a shadow proposal you then bought yourself | +1, up to 15 in total per task type |
 
 Design notes:
 - **Rise slowly, fall fast.** A good purchase earns roughly +5 to +8 with its outcome; one violation costs −10.

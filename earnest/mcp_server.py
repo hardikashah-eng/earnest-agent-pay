@@ -47,6 +47,25 @@ def get_limits(task_type: str) -> dict:
 
 
 @mcp.tool()
+def get_account() -> dict:
+    """Your spending account, if the user gave you one: total balance, and each source (your
+    allowance, store gift cards and prepaid cards, last 4 digits only). A gift card only pays at
+    its store. You can't top it up; ask the user. Also says if you're in read-only shadow mode."""
+    out: dict = {}
+    if _gateway.ledger.get_account(USER_ID, AGENT_ID) is not None:
+        acct = _gateway.account(USER_ID, AGENT_ID)
+        out = {k: acct[k] for k in ("status", "balance", "sources")}
+    else:
+        out = {"status": "no_account", "note": "purchases are paid with single-use cards when approved"}
+    shadow = _gateway.ledger.shadow_enrollment(USER_ID, AGENT_ID)
+    if shadow and not shadow["ended_at"]:
+        out["mode"] = "shadow"
+        out["shadow_note"] = ("read-only: your requests get a real decision but no card and no money. "
+                              "Propose what the user would buy; matches with their real purchases build trust.")
+    return out
+
+
+@mcp.tool()
 def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category: str = "",
                    mandate_id: str = "", quantity: int = 1, product_id: str = "") -> dict:
     """Score a purchase before you request it. Returns a 0-1 confidence with four factors:
@@ -63,8 +82,10 @@ def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category:
 def request_spend(mandate_id: str, amount: float, merchant: str, category: str, reason: str,
                   item: str = "", quantity: int = 1, product_id: str = "", recurring: bool = False, international: bool = False,
                   ask_first: bool = False) -> dict:
-    """Ask to spend money for a mandate. Returns approved (with a scoped, expiring card),
-    escalated (waiting for the user) or denied, plus a confidence block. Name the `item` you
+    """Ask to spend money for a mandate. Returns approved (with a scoped, expiring card, or a
+    `payment` block saying which gift card / prepaid card of yours pays), escalated (waiting for
+    the user), denied, or shadow (read-only mode: `shadow.would_be` is the decision you'd have
+    got; nothing is bought), plus a confidence block. Name the `item` you
     are buying so the gateway can match it against the user's past purchases. Set
     ask_first=true when you're unsure: asking before acting is rewarded when it was needed.
     Spending outside the mandate, or at an untrusted merchant, is penalized heavily."""

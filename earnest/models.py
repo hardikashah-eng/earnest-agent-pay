@@ -305,6 +305,7 @@ class Credential:
     backend: str
     item_lock: str | None = None  # the item the agent claimed; checked against cart line items
     product_lock: str | None = None  # its product ID, when known; beats text matching
+    account: str | None = None  # the agent account it's drawn from (SPEC.md 3i)
 
     def to_dict(self) -> dict:
         out = {
@@ -316,23 +317,31 @@ class Credential:
             out["item_lock"] = self.item_lock
         if self.product_lock:
             out["product_lock"] = self.product_lock
+        if self.account:
+            out["account"] = self.account
         return out
 
 
 @dataclass
 class Decision:
     request_id: str
-    status: str  # approved | denied | escalated
+    status: str  # approved | denied | escalated | shadow
     reasons: list[str]
     tier: str
     credential: Credential | None = None
     confidence: dict[str, Any] | None = None  # merchant trust + purchase history, see history.py
+    payment: dict[str, Any] | None = None  # how an approved purchase is paid from an agent account (3i)
+    shadow: dict[str, Any] | None = None   # shadow mode: what the decision would have been (3j)
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {"request_id": self.request_id, "status": self.status,
                                "reasons": self.reasons, "tier": self.tier}
         if self.credential is not None:
             out["credential"] = self.credential.to_dict()
+        if self.payment is not None:
+            out["payment"] = self.payment
+        if self.shadow is not None:
+            out["shadow"] = self.shadow
         if self.confidence is not None:
             out["confidence"] = self.confidence
         return out
