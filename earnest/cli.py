@@ -20,6 +20,14 @@
     python -m earnest import statement.csv --user user_demo --card "Visa 4417"
     python -m earnest shadow start --user user_demo --agent agent_shopper --card "Visa 4417"
     python -m earnest shadow report --user user_demo --agent agent_shopper
+    python -m earnest gifts import-calendar birthdays.ics --user user_demo
+    python -m earnest gifts add-person Sam --user user_demo --relationship friend --likes "hiking;coffee"
+    python -m earnest gifts policy --user user_demo --agent agent_shopper --annual-budget 1500
+    python -m earnest gifts plan --user user_demo                # run daily: plans upcoming dates
+    python -m earnest gifts approve g_123 --user user_demo
+    python -m earnest eval policy --user user_demo --goal save_time --hourly-value 50 --threshold 7.5 --gate on
+    python -m earnest eval review req_123 --uses-per-month 8 --hours-saved 20 --solves 7
+    python -m earnest eval agent --user user_demo --agent agent_shopper
     python -m earnest demo
 """
 from __future__ import annotations
@@ -233,6 +241,125 @@ def _shadow_cmd(args, ap, gw: Gateway) -> int:
     return 0
 
 
+def _split(v: str | None) -> list[str]:
+    return [x.strip() for x in (v or "").split(";") if x.strip()]
+
+
+def _gifts_cmd(args, ap, gw: Gateway) -> int:
+    a, target, value = args.action, args.target, args.value
+    user = args.user
+    if not user:
+        ap.error(f"gifts {a} needs --user")
+
+    def need(what, v):
+        if v is None:
+            ap.error(f"gifts {a} needs {what}")
+        return v
+    if a == "add-person":
+        sizes = dict(x.split("=", 1) for x in args.size or [] if "=" in x)
+        _print(gw.add_person(user, need("a name", target), args.relationship, budget=args.budget,
+                             auto_buy_max=args.auto_buy_max, address=args.address, sizes=sizes, notes=args.notes,
+                             likes=_split(args.likes), dislikes=_split(args.dislikes), wishes=_split(args.wishes)))
+    elif a == "person":
+        _print(gw.person_card(user, need("a name", target)))
+    elif a == "people":
+        _print([{"name": p["name"], "relationship": p["relationship"], "budget": p["budget"],
+                 "auto_buy_max": p["auto_buy_max"]} for p in gw.ledger.people(user)])
+    elif a == "add-date":
+        _print(gw.add_occasion(user, need("a name", target), args.kind, need("--date", args.date), args.label))
+    elif a == "like":
+        _print(gw.add_gift_preference(user, need("a name", target), need("the preference text", value),
+                                      args.kind_pref, args.source))
+    elif a == "forget-like":
+        p = gw.ledger.person(user, need("a name", target))
+        if p is None or not gw.ledger.remove_pref(p["id"], need("the preference text", value)):
+            print("not found")
+            return 2
+        print("removed")
+    elif a == "import-people":
+        _print(gw.import_people(user, Path(need("a CSV file", target)).read_text(encoding="utf-8-sig")))
+    elif a == "import-calendar":
+        _print(gw.import_calendar(user, Path(need("an .ics file", target)).read_text(encoding="utf-8-sig")))
+    elif a == "policy":
+        rel = dict(x.split("=", 1) for x in args.budget_for or [] if "=" in x)
+        auto = None if args.auto_buy is None else args.auto_buy == "on"
+        _print(gw.set_gift_policy(user, agent_id=args.agent, lead_days=args.lead_days,
+                                  annual_budget=args.annual_budget, auto_buy=auto,
+                                  relationship_budgets={k: float(v) for k, v in rel.items()} or None))
+    elif a == "upcoming":
+        _print(gw.upcoming_gifts(user, args.days) or "nothing coming up")
+    elif a == "plan":
+        _print(gw.plan_gifts(user) or "no new plans")
+    elif a == "plans":
+        _print([gw.gift_plan_view(p["id"]) for p in gw.ledger.plans(user)])
+    elif a == "show":
+        _print(gw.gift_plan_view(need("a plan id", target)))
+    elif a == "brief":
+        _print(gw.gift_brief(need("a plan id", target)))
+    elif a == "propose":
+        options = json.loads(Path(args.options).read_text()) if args.options else None
+        _print(gw.propose_gifts(need("a plan id", target), options, args.agent))
+    elif a == "catalog":
+        print(f"loaded {gw.load_gift_catalog(json.loads(Path(need('a JSON file', target)).read_text()))} items")
+    elif a == "budget":
+        _print(gw.set_gift_budget(need("a plan id", target), float(need("an amount", value))))
+    elif a == "approve":
+        _print(gw.approve_gift(need("a plan id", target), args.option))
+    elif a == "skip":
+        _print(gw.skip_gift(need("a plan id", target), value or "skipped by you"))
+    elif a == "feedback":
+        _print(gw.gift_feedback(need("a plan id", target), need("loved|liked|returned|disliked", value)))
+    return 0
+
+
+def _eval_inputs(args) -> dict:
+    d = {}
+    for k, attr in (("lifespan_months", "lifespan_months"), ("uses_per_month", "uses_per_month"),
+                    ("total_uses", "total_uses"), ("hours_saved_per_year", "hours_saved"), ("solves", "solves"),
+                    ("resale_value", "resale"), ("added_value_usd", "added_value")):
+        v = getattr(args, attr)
+        if v is not None:
+            d[k] = v
+    if args.core is not None:
+        d["core"] = args.core == "yes"
+    benefits = dict(x.split("=", 1) for x in args.benefit or [] if "=" in x)
+    if benefits:
+        d["benefits"] = {k: float(v) for k, v in benefits.items()}
+    scores = dict(x.split("=", 1) for x in args.score or [] if "=" in x)
+    if scores:
+        d["scores"] = {k: float(v) for k, v in scores.items()}
+    return d
+
+
+def _eval_cmd(args, ap, gw: Gateway) -> int:
+    a = args.action
+    if a == "policy":
+        if not args.user:
+            ap.error("eval policy needs --user")
+        weights = None
+        if args.weights:
+            try:
+                weights = {k: float(v) for k, v in (x.split("=", 1) for x in args.weights.split(","))}
+            except ValueError:
+                ap.error("--weights looks like price=30,time_saved=25,utility=30,added_value=15")
+        _print(gw.set_eval_policy(args.user, args.goal, weights, args.threshold, args.hourly_value,
+                                  None if args.gate is None else args.gate == "on", args.net_check_over))
+    elif a == "score":
+        if not (args.user and args.price):
+            ap.error("eval score needs --user and --price")
+        _print(gw.score_purchase(args.user, args.price, _eval_inputs(args), args.market_price))
+    elif a == "show":
+        _print(gw.purchase_eval(args.id or ap.error("eval show needs a request id")))
+    elif a == "review":
+        _print(gw.review_purchase(args.id or ap.error("eval review needs a request id"), _eval_inputs(args)))
+    elif a == "agent":
+        if not (args.user and args.agent):
+            ap.error("eval agent needs --user and --agent")
+        out = gw.agent_eval(args.user, args.agent, args.days)
+        _print(out if args.json else out["summary"])
+    return 0
+
+
 def _backend_from_env():
     if os.environ.get("EARNEST_BACKEND", "mock") == "stripe":
         from .backends import StripeIssuingBackend
@@ -397,6 +524,66 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--task", default="shopping", help="replay: task type for the tier")
     p.add_argument("--days", type=int, default=90, help="replay: how far back")
     p.add_argument("--allowance", type=float, help="live: open an agent account with this allowance")
+
+    p = sub.add_parser("gifts", help="gift concierge: people, dates, budgets, and a gift ready before each one")
+    p.add_argument("action", choices=["add-person", "person", "people", "add-date", "like", "forget-like",
+                                      "import-people", "import-calendar", "policy", "upcoming", "plan", "plans",
+                                      "show", "brief", "propose", "catalog", "budget", "approve", "skip",
+                                      "feedback"])
+    p.add_argument("target", nargs="?", help="a person's name, a plan id, or a file")
+    p.add_argument("value", nargs="?", help="like: the text; budget: the amount; feedback: loved|liked|returned|disliked")
+    p.add_argument("--user")
+    p.add_argument("--relationship", help="add-person: partner, spouse, parent, child, sibling, friend, colleague...")
+    p.add_argument("--budget", type=float, help="add-person: per-gift budget")
+    p.add_argument("--auto-buy-max", type=float,
+                   help="add-person: buy without asking up to this (also needs `policy --auto-buy on`)")
+    p.add_argument("--address", help="add-person: where gifts go (only shown to the agent once a gift is approved)")
+    p.add_argument("--likes", help="add-person: ';'-separated")
+    p.add_argument("--dislikes", help="add-person: ';'-separated")
+    p.add_argument("--wishes", help="add-person: ';'-separated things they asked for")
+    p.add_argument("--size", action="append", help="add-person: e.g. --size shirt=M")
+    p.add_argument("--notes")
+    p.add_argument("--kind", default="birthday", choices=["birthday", "anniversary", "holiday", "other"],
+                   help="add-date")
+    p.add_argument("--date", help="add-date: YYYY-MM-DD (the real year enables milestones) or MM-DD")
+    p.add_argument("--label", help="add-date: e.g. 'Diwali'")
+    p.add_argument("--pref", dest="kind_pref", default="like", choices=["like", "dislike", "wish"], help="like")
+    p.add_argument("--source", default="you", choices=["you", "wishlist", "conversation", "social", "feedback"],
+                   help="like: where you learned it")
+    p.add_argument("--agent", help="policy: the shopping agent; propose: who proposes")
+    p.add_argument("--lead-days", type=int, help="policy: start this many days ahead")
+    p.add_argument("--annual-budget", type=float, help="policy: total for gifts per year")
+    p.add_argument("--auto-buy", choices=["on", "off"], help="policy: allow buying without asking (per person)")
+    p.add_argument("--budget-for", action="append", help="policy: e.g. --budget-for friend=50")
+    p.add_argument("--days", type=int, default=60, help="upcoming: how far ahead")
+    p.add_argument("--options", help="propose: JSON file of options (default: the popular-items catalog)")
+    p.add_argument("--option", type=int, help="approve: pick this shortlisted option instead")
+
+    p = sub.add_parser("eval", help="score purchases on your rubric: price, time saved, utility, added value")
+    p.add_argument("action", choices=["policy", "score", "show", "review", "agent"])
+    p.add_argument("id", nargs="?", help="show / review: request id")
+    p.add_argument("--user")
+    p.add_argument("--agent")
+    p.add_argument("--goal", choices=["balanced", "save_money", "save_time", "wellbeing"], help="policy")
+    p.add_argument("--weights", help="policy: price=30,time_saved=25,utility=30,added_value=15 (adds to 100)")
+    p.add_argument("--threshold", type=float, help="policy: the score a purchase must reach (1-10)")
+    p.add_argument("--hourly-value", type=float, help="policy: what an hour of your time is worth")
+    p.add_argument("--gate", choices=["on", "off"], help="policy: send requests below the bar to you")
+    p.add_argument("--net-check-over", type=float, help="policy: price from which net value must be >= 0")
+    p.add_argument("--price", type=float, help="score")
+    p.add_argument("--market-price", type=float, help="score")
+    p.add_argument("--lifespan-months", type=float)
+    p.add_argument("--uses-per-month", type=float)
+    p.add_argument("--total-uses", type=float)
+    p.add_argument("--hours-saved", type=float, help="hours saved per year")
+    p.add_argument("--solves", type=float, help="1-10: how well it solves the problem")
+    p.add_argument("--core", choices=["yes", "no"], help="a core, frequent function?")
+    p.add_argument("--benefit", action="append", help="e.g. --benefit stress=2 (stress, health, skill, social, comfort: 0-3)")
+    p.add_argument("--resale", type=float, help="resale value after a year")
+    p.add_argument("--added-value", type=float, help="other value over a year, in dollars")
+    p.add_argument("--score", action="append", help="direct 1-10 score, e.g. --score utility=7")
+    p.add_argument("--days", type=int, default=365, help="agent: period")
+    p.add_argument("--json", action="store_true", help="agent: full report")
 
     # --- spending insights ---
     p = sub.add_parser("import", help="manually import a card statement CSV")
@@ -592,6 +779,10 @@ def main(argv: list[str] | None = None) -> int:
             return _account_cmd(args, ap, gw)
         elif args.cmd == "shadow":
             return _shadow_cmd(args, ap, gw)
+        elif args.cmd == "gifts":
+            return _gifts_cmd(args, ap, gw)
+        elif args.cmd == "eval":
+            return _eval_cmd(args, ap, gw)
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
         elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):
