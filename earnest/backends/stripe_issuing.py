@@ -112,7 +112,7 @@ class StripeIssuingBackend:
 
     def issue(self, *, cap: float, currency: str, merchant: str, lifetime_hours: float,
               single_use: bool, now: datetime, item: str | None = None,
-              product_id: str | None = None) -> Credential:
+              product_id: str | None = None, account: str | None = None) -> Credential:
         expires = now + timedelta(hours=lifetime_hours)
         metadata = {"earnest_merchant_lock": merchant, "earnest_expires_at": expires.isoformat(),
                     "earnest_single_use": "1" if single_use else "0", "earnest_cap": f"{cap:.2f}"}
@@ -120,6 +120,8 @@ class StripeIssuingBackend:
             metadata["earnest_item_lock"] = item[:500]
         if product_id:
             metadata["earnest_product_lock"] = product_id
+        if account:
+            metadata["earnest_account"] = account  # the agent account this card is drawn from
         card = self.call("POST", "/v1/issuing/cards", {
             "cardholder": self.cardholder_id, "currency": currency.lower(), "type": "virtual",
             "status": "active", "metadata": metadata,
@@ -127,7 +129,7 @@ class StripeIssuingBackend:
                 {"amount": int(round(cap * 100)), "interval": "all_time"}]},
         })
         return Credential(card["id"], round(cap, 2), currency, merchant, expires, single_use, self.name, item,
-                          product_id)
+                          product_id, account)
 
     def cancel(self, card_id: str) -> None:
         self.call("POST", f"/v1/issuing/cards/{card_id}", {"status": "canceled"})

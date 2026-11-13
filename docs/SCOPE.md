@@ -99,3 +99,10 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 - How to benchmark "fair price" per task type without a data source?
 - Should trust reset fully on a model change, or decay partly?
 - How to score open-ended tasks (gifts) where success is known only later?
+
+## Agent accounts and shadow mode (v0.4) — done
+
+- Agent accounts: a balance per (user, agent) from an allowance (single-use virtual cards), store gift cards (store-locked; last 4 digits only) or prepaid cards. Allowance ceiling follows the trust tier: decreases automatic, raises opt-in. Refills, holds and releases, refunds, statements. Violations, item mismatches and disputes freeze the account and return the allowance; one command freezes every agent.
+- Shadow mode: card-labelled statement imports; a read-only card profile with suggested limits; point-in-time replay of a card's purchases at every tier; agents in shadow get real decisions but no money or points; proposals matched to later card purchases (small capped trust) and reviewed by the user; a readiness report that suggests going live with an agent account.
+
+Next: gift-card balance checks through retailer APIs, a bank-aggregator `TransactionSource` so shadow matching runs without exports, and per-category allowances.

@@ -13,6 +13,13 @@
     python -m earnest orders import costco-receipts.csv --retailer costco.com --user user_demo
     python -m earnest membership add costco.com --program executive --user user_demo
     python -m earnest interest add "standing desk" --max-price 350 --user user_demo
+    python -m earnest account open --user user_demo --agent agent_shopper --allowance 25
+    python -m earnest account add-card --user user_demo --agent agent_shopper --kind gift_card \
+        --merchant target.com --balance 50 --last4 4417
+    python -m earnest account freeze --user user_demo              # every agent, at once
+    python -m earnest import statement.csv --user user_demo --card "Visa 4417"
+    python -m earnest shadow start --user user_demo --agent agent_shopper --card "Visa 4417"
+    python -m earnest shadow report --user user_demo --agent agent_shopper
     python -m earnest demo
 """
 from __future__ import annotations
@@ -41,16 +48,17 @@ def _insights_cmd(args, gw: Gateway) -> int:
 
     store = TransactionStore(gw.ledger.db)
     if args.cmd == "import":
-        _print(import_file(store, args.file, args.user).to_dict())
+        _print(import_file(store, args.file, args.user, card=args.card).to_dict())
     elif args.cmd == "sync":
         if args.watch:
             print(f"watching {args.inbox} every {args.every:g}s (Ctrl+C to stop)")
             try:
-                watch_folder(store, args.inbox, args.user, args.every, on_result=lambda r: _print(r.to_dict()))
+                watch_folder(store, args.inbox, args.user, args.every, on_result=lambda r: _print(r.to_dict()),
+                             card=args.card)
             except KeyboardInterrupt:
                 pass
         else:
-            results = sync_folder(store, args.inbox, args.user)
+            results = sync_folder(store, args.inbox, args.user, args.card)
             _print([r.to_dict() for r in results] or f"no new files in {args.inbox}")
             if any(r.error for r in results):
                 return 1
@@ -136,6 +144,92 @@ def _context_cmd(args, gw: Gateway) -> int:
             print("removed" if gw.ledger.remove_membership(args.user, args.merchant) else "no such membership")
         else:
             _print(gw.ledger.memberships(args.user))
+    return 0
+
+
+def _account_cmd(args, ap, gw: Gateway) -> int:
+    a = args.action
+    needs_agent = a not in ("list", "freeze", "refill", "offers", "refund", "settle")
+    if needs_agent and not args.agent:
+        ap.error(f"account {a} needs --agent")
+    if a not in ("refund",) and not args.user:
+        ap.error(f"account {a} needs --user")
+    if a == "open":
+        _print(gw.open_account(args.user, args.agent, args.allowance or 0.0, args.max_allowance,
+                               args.topup_to, args.every_days))
+    elif a == "show":
+        _print(gw.account(args.user, args.agent))
+    elif a == "list":
+        _print([gw.account(args.user, x["agent_id"]) for x in gw.ledger.accounts(args.user)])
+    elif a == "topup":
+        if not args.amount:
+            ap.error("account topup needs --amount")
+        _print(gw.top_up(args.user, args.agent, args.amount))
+    elif a == "add-card":
+        if not (args.kind and args.balance and args.last4):
+            ap.error("account add-card needs --kind, --balance and --last4")
+        _print(gw.add_card(args.user, args.agent, args.kind, args.balance, args.last4, args.merchant, args.label))
+    elif a in ("set-balance", "remove-card"):
+        if not args.id:
+            ap.error(f"account {a} needs a funding id (see `earnest account show`)")
+        if a == "set-balance":
+            if args.balance is None:
+                ap.error("account set-balance needs --balance")
+            _print(gw.set_card_balance(args.user, args.agent, args.id, args.balance))
+        else:
+            gw.remove_card(args.user, args.agent, args.id)
+            print(f"removed {args.id}")
+    elif a == "freeze":
+        _print(gw.freeze(args.user, args.agent, args.reason or "frozen by you"))
+    elif a == "unfreeze":
+        _print(gw.unfreeze(args.user, args.agent))
+    elif a == "refill":
+        _print(gw.refill_accounts(args.user) or "no refills due")
+    elif a == "offers":
+        _print(gw.account_offers(args.user) or "no raises on offer")
+    elif a == "raise":
+        _print(gw.accept_raise(args.user, args.agent))
+    elif a == "refund":
+        if not args.id:
+            ap.error("account refund needs a request id")
+        _print(gw.refund(args.id, args.amount))
+    elif a == "settle":
+        _print(gw.settle_accounts(args.user) or "nothing to release")
+    elif a == "statement":
+        st = gw.account_statement(args.user, args.agent, args.days)
+        _print(st if args.json else st["summary"])
+    return 0
+
+
+def _shadow_cmd(args, ap, gw: Gateway) -> int:
+    a = args.action
+    if a == "review":
+        if not (args.id and args.answer):
+            ap.error("shadow review REQUEST_ID yes|no")
+        _print(gw.shadow_review(args.id, args.answer == "yes"))
+        return 0
+    if not args.user:
+        ap.error(f"shadow {a} needs --user")
+    if a in ("start", "report", "live") and not args.agent:
+        ap.error(f"shadow {a} needs --agent")
+    if a in ("start", "profile", "replay") and not args.card:
+        ap.error(f"shadow {a} needs --card (see `earnest shadow cards`)")
+    if a == "start":
+        _print(gw.start_shadow(args.user, args.agent, args.card))
+    elif a == "cards":
+        _print(gw.ledger.cards(args.user) or "no labelled cards yet: import with --card")
+    elif a == "profile":
+        _print(gw.card_profile(args.user, args.card))
+    elif a == "replay":
+        _print(gw.shadow_replay(args.user, args.card, args.task, args.agent, args.days))
+    elif a == "pending":
+        _print(gw.shadow_pending(args.user) or "nothing to review")
+    elif a == "match":
+        _print(gw.shadow_match(args.user) or "no new matches")
+    elif a == "report":
+        _print(gw.shadow_report(args.user, args.agent))
+    elif a == "live":
+        _print(gw.go_live(args.user, args.agent, args.allowance))
     return 0
 
 
@@ -272,12 +366,46 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="demo/limits.svg")
     p.add_argument("--days", type=int, default=40)
 
+    p = sub.add_parser("account", help="agent accounts: an allowance, gift cards or prepaid cards per agent")
+    p.add_argument("action", choices=["open", "show", "list", "topup", "add-card", "set-balance", "remove-card",
+                                      "freeze", "unfreeze", "refill", "offers", "raise", "refund", "settle",
+                                      "statement"])
+    p.add_argument("id", nargs="?", help="funding id (set-balance, remove-card) or request id (refund)")
+    p.add_argument("--user")
+    p.add_argument("--agent", help="freeze: omit to freeze every agent")
+    p.add_argument("--allowance", type=float, help="open: starting allowance")
+    p.add_argument("--max-allowance", type=float, help="open: most the allowance may hold (default: tier limit)")
+    p.add_argument("--topup-to", type=float, help="open: refill the allowance to this...")
+    p.add_argument("--every-days", type=int, help="open: ...this often (run `account refill` daily)")
+    p.add_argument("--amount", type=float, help="topup / refund amount")
+    p.add_argument("--kind", choices=["gift_card", "prepaid"], help="add-card")
+    p.add_argument("--merchant", help="add-card: the store a gift card is for, e.g. target.com")
+    p.add_argument("--balance", type=float, help="add-card / set-balance")
+    p.add_argument("--last4", help="add-card: last 4 digits only (never the code)")
+    p.add_argument("--label", help="add-card: a name, e.g. 'Target birthday card'")
+    p.add_argument("--reason", help="freeze: why")
+    p.add_argument("--days", type=int, default=30, help="statement period")
+    p.add_argument("--json", action="store_true", help="statement: full entries")
+    p = sub.add_parser("shadow", help="read-only shadow mode: an agent learns from one card, spends nothing")
+    p.add_argument("action", choices=["start", "cards", "profile", "replay", "pending", "review", "match",
+                                      "report", "live"])
+    p.add_argument("id", nargs="?", help="review: request id")
+    p.add_argument("answer", nargs="?", choices=["yes", "no"], help="review: would you have let it buy this?")
+    p.add_argument("--user")
+    p.add_argument("--agent")
+    p.add_argument("--card", help="the card label used at import, e.g. 'Visa 4417'")
+    p.add_argument("--task", default="shopping", help="replay: task type for the tier")
+    p.add_argument("--days", type=int, default=90, help="replay: how far back")
+    p.add_argument("--allowance", type=float, help="live: open an agent account with this allowance")
+
     # --- spending insights ---
     p = sub.add_parser("import", help="manually import a card statement CSV")
     p.add_argument("file")
     p.add_argument("--user", required=True)
+    p.add_argument("--card", help="which card this statement is for, e.g. 'Visa 4417' (for shadow mode)")
     p = sub.add_parser("sync", help="automatically import new CSVs dropped into an inbox folder")
     p.add_argument("--user", required=True)
+    p.add_argument("--card", help="which card the inbox is for")
     p.add_argument("--inbox", default="statements/inbox")
     p.add_argument("--watch", action="store_true", help="keep running and sync on an interval")
     p.add_argument("--every", type=float, default=3600, help="seconds between syncs with --watch")
@@ -460,6 +588,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "charge":
             items = _load(args.items) if args.items else None
             _print(gw.authorize_charge(args.credential_id, args.amount, args.merchant, items))
+        elif args.cmd == "account":
+            return _account_cmd(args, ap, gw)
+        elif args.cmd == "shadow":
+            return _shadow_cmd(args, ap, gw)
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
         elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):

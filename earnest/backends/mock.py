@@ -17,11 +17,12 @@ class MockBackend:
 
     def issue(self, *, cap: float, currency: str, merchant: str, lifetime_hours: float,
               single_use: bool, now: datetime, item: str | None = None,
-              product_id: str | None = None) -> Credential:
+              product_id: str | None = None, account: str | None = None) -> Credential:
         cred = Credential(
             id="card_" + uuid.uuid4().hex[:12], cap=round(cap, 2), currency=currency,
             merchant_lock=merchant, expires_at=now + timedelta(hours=lifetime_hours),
-            single_use=single_use, backend=self.name, item_lock=item, product_lock=product_id)
+            single_use=single_use, backend=self.name, item_lock=item, product_lock=product_id,
+            account=account)
         self.cards[cred.id] = cred
         self.spent[cred.id] = 0.0
         return cred

@@ -31,16 +31,26 @@ class TransactionStore:
         self.db = db
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(transactions)")}
+        if "card" not in cols:  # databases made before cards were tracked
+            with self.db:
+                self.db.execute("ALTER TABLE transactions ADD COLUMN card TEXT")
 
-    def add(self, user_id: str, txs: list[Transaction], source: str) -> tuple[int, int]:
-        """Insert transactions, skipping ones already stored. Returns (added, duplicates)."""
+    def add(self, user_id: str, txs: list[Transaction], source: str, card: str | None = None) -> tuple[int, int]:
+        """Insert transactions, skipping ones already stored. Returns (added, duplicates).
+        `card` labels which card the statement is for (e.g. "Visa 4417"); re-importing an
+        unlabelled statement with a card labels the rows already stored."""
         added = 0
         with self.db:
             for t in txs:
                 cur = self.db.execute(
-                    "INSERT OR IGNORE INTO transactions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (t.id, user_id, t.date.isoformat(), t.description, t.merchant, t.category, t.amount, source))
+                    "INSERT OR IGNORE INTO transactions (id, user_id, date, description, merchant, category, "
+                    "amount, source, card) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (t.id, user_id, t.date.isoformat(), t.description, t.merchant, t.category, t.amount, source,
+                     card))
                 added += cur.rowcount
+                if not cur.rowcount and card:
+                    self.db.execute("UPDATE transactions SET card = ? WHERE id = ? AND card IS NULL", (card, t.id))
         return added, len(txs) - added
 
     def all(self, user_id: str, until: date | None = None) -> list[Transaction]:
