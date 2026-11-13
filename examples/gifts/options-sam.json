@@ -1,0 +1,6 @@
+[
+  {"title": "Insulated hiking coffee thermos", "merchant": "target.com", "price": 34, "eta_days": 2, "rating": 4.6, "category": "outdoor"},
+  {"title": "Pour-over coffee kit", "merchant": "amazon.com", "price": 42, "eta_days": 3, "rating": 4.5, "category": "kitchen"},
+  {"title": "National parks annual pass", "merchant": "store.usgs.gov", "price": 80, "digital": true, "rating": 4.9},
+  {"title": "Scented candle trio", "merchant": "target.com", "price": 25, "eta_days": 2}
+]

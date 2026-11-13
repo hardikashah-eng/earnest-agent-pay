@@ -1,0 +1,8 @@
+[
+  {"title": "Wireless earbuds", "merchant": "bestbuy.com", "price": 49, "eta_days": 3, "rating": 4.4, "popularity": 0.9, "category": "electronics"},
+  {"title": "Coffee subscription, 3 months", "merchant": "amazon.com", "price": 45, "digital": true, "rating": 4.3, "popularity": 0.7, "category": "coffee"},
+  {"title": "Hiking daypack 20L", "merchant": "rei.com", "price": 60, "eta_days": 4, "rating": 4.7, "popularity": 0.6, "category": "outdoor"},
+  {"title": "Gardening tool set", "merchant": "homedepot.com", "price": 35, "eta_days": 5, "rating": 4.5, "popularity": 0.5, "category": "garden"},
+  {"title": "Bestselling mystery novel box set", "merchant": "amazon.com", "price": 30, "eta_days": 2, "rating": 4.6, "popularity": 0.8, "category": "books"},
+  {"title": "Loose leaf tea sampler", "merchant": "amazon.com", "price": 22, "eta_days": 2, "rating": 4.5, "popularity": 0.6, "category": "tea"}
+]

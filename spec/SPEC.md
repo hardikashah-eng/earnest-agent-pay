@@ -197,6 +197,104 @@ Shadow mode lets an agent prove itself before it spends anything, using one of t
 6. **Reviews** (`earnest shadow pending`, `earnest shadow review <id> yes|no`): would you have let it buy this? It agrees when earnest would have approved and you say yes, or would have denied and you say no. Would-be escalations count as `asked`, neither agreeing nor disagreeing.
 7. **Readiness** (`earnest shadow report`): ready with no would-be violations in the last 30 days and either 10+ reviews with 90%+ agreement, or 5+ matches. When ready, the report suggests `earnest shadow live --allowance X`, where X is the card's suggested starting allowance capped at the agent's tier ceiling. `live` ends shadow mode and opens (or tops up) an agent account, so the agent's first real spending is capped from day one.
 
+### 3k. Gift concierge
+
+earnest remembers the people you give gifts to and their dates. Before each date, a shopping agent finds options, earnest picks the one that fits best, and it's bought only with your approval, or within an authorization you gave for that person.
+
+**People** (`gifts add-person`, or `gifts import-people` from a CSV with `name, relationship, birthday, anniversary, likes, dislikes, budget, auto_buy_max`) have:
+- a relationship
+- an optional per-gift budget
+- sizes and notes
+- `auto_buy_max`: the most the agent may spend on them without asking
+- an address, shown to the agent only for an approved gift
+
+**Occasions** are yearly dates: `birthday`, `anniversary`, `holiday` or `other`, written `YYYY-MM-DD` or `MM-DD`. With the real year, earnest knows which birthday or anniversary it is. They come from you, the contacts CSV, or a calendar export (`gifts import-calendar file.ics`). From a calendar, earnest takes events whose title names a birthday or anniversary ("Sam's birthday", "Anniversary - Priya") and ignores other events. A recurring event's first year is taken as the real year; malformed dates are skipped.
+
+**Preferences** are `like`, `dislike` or `wish`, each with a source and weight:
+
+| Source | Weight | Meaning |
+|---|---|---|
+| `wishlist` | 1.0 | they asked for it |
+| `feedback` | 0.9 | how a past gift went |
+| `you` | 0.8 | you said so |
+| `conversation` | 0.6 | an agent heard it in your chats |
+| `social` | 0.5 | a public post or wishlist you pointed to |
+| `popular` | 0.3 | popular items, when nothing else is known |
+
+earnest never looks through anyone's accounts: preferences come only from you, your conversations, or links you share. Agents can add `conversation`, `wishlist` and `social` preferences, not `you`.
+
+**Policy** (`gifts policy`):
+- the shopping agent
+- `lead_days`, how far ahead to plan (default 14)
+- an annual gift budget
+- budgets by relationship, overriding the defaults (partner/spouse $150, parent $100, child and grandparent $75, sibling $60, friend $40, colleague $25, other $30)
+- `auto_buy`, the master switch for buying without asking (default off)
+
+**Plans.** `gifts plan` (run daily) opens a plan for each occasion inside the lead window, at most once per occasion per year. Plans not approved by the date are marked `missed`.
+
+A plan's budget, in order:
+1. The person's own budget, or the guidance for their relationship.
+2. ×1.5 for a milestone: birthdays 1, 13, 16, 18, 21 and every 10th; the 1st anniversary and every 5th.
+3. Capped at the annual budget minus what's already spent or planned this year. Nothing left → `declined`.
+
+Statuses: `open` → `awaiting_approval` → `approved` → `ordered` → `done`. Also `declined`, `skipped` and `missed`.
+
+**The agent's brief** (`get_gift_tasks`, `gifts brief`) contains:
+- who the gift is for and the occasion
+- the date and days left
+- the budget
+- wishes, likes and things to avoid, each with its source
+- sizes, and gifts given before
+- the agent's gift-card balances and account (3i)
+
+There's no address in it.
+
+**Options and ranking** (`propose_gift_options`, `gifts propose`). Up to 20 options, each with `title, merchant, price`, plus optional `category, url, product_id, eta_days, rating, popularity, digital`. Without options, the popular-items catalog (`gifts catalog`) is ranked instead. Each option gets a score from 0 to 1:
+
+| Factor | Weight | |
+|---|---|---|
+| Fits the person | 0.45 | best overlap with a like or wish, × the source weight (likes count 0.8 as much as wishes) |
+| Budget | 0.2 | 1.0 at 60–100% of the budget; less if it looks like an afterthought |
+| Arrives in time | 0.1 | |
+| Ratings and popularity | 0.15 | |
+| Money already set aside | 0.1 | a linked gift card for that store covers it |
+
+These problems rule an option out:
+- `over_budget`
+- `disliked` (half or more of a dislike's words)
+- `arrives_late` (`eta_days` later than one day before the date; digital gifts always arrive in time)
+- `already_given` (80%+ word overlap with a past gift)
+- `untrusted_merchant`
+
+A suspicious store halves the quality factor. Options scoring under 0.35 aren't suggested. The top five are kept as the shortlist. If nothing usable is left and an option failed only on budget, earnest suggests raising this gift's budget (`gifts budget PLAN AMOUNT`; only you can).
+
+**Putting a gift forward.** The best usable option becomes a spend request (2) under a per-plan gift mandate (`mode: gift`, `task_type: gift_shopping`, `secrecy: true`, deadline = the date, `ship_to: recipient` when there's an address).
+
+The mandate's `approval` is `auto` only when all of these hold:
+- policy `auto_buy` is on
+- the person has an `auto_buy_max`
+- the price is within it
+
+Otherwise it's `always`, so the request reaches you through the usual approval links, notifications and `earnest pending`. Even when authorized, the request still goes through every rule: tier caps, merchant checks and the agent's account (3i). Anything those escalate still comes to you. An option earnest denies is skipped for the next usable one.
+
+**Approving.** `gifts approve PLAN` approves the suggestion. `--option N` picks another shortlisted option: the earlier request is withdrawn (a user denial, which costs the agent nothing) and the new one is approved as your decision. Approving or denying through `earnest approve` / `deny` or an approval link updates the plan too. If the agent's account can't cover the gift, approval fails until you top up; the plan keeps the request and says why.
+
+**Buying.** For an approved plan, the agent gets:
+- the item, the store and the price
+- the payment (a card or the account source)
+- `buy_before`, the card's expiry
+- the address, or you when there's none
+- `order_by`, the date minus delivery time minus one day
+- a gift message, and a reminder to keep it secret
+
+It reports `gift_ordered`.
+
+**Feedback.** `gifts feedback PLAN loved|liked|returned|disliked`:
+- records the gift as a `like` or `dislike` with source `feedback`
+- reports your verdict on the purchase (accepted / rejected) for the agent's trust, if you hadn't already
+
+Each approved gift goes into the person's gift history, so it isn't given again.
+
 ## 4. Scoring
 
 | Event | Points |

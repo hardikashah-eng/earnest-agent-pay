@@ -89,6 +89,35 @@ CREATE TABLE IF NOT EXISTS shadow_enrollments (
     user_id TEXT NOT NULL, agent_id TEXT NOT NULL, card TEXT NOT NULL, started_at TEXT NOT NULL,
     ended_at TEXT, PRIMARY KEY (user_id, agent_id)
 );
+CREATE TABLE IF NOT EXISTS gift_people (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT NOT NULL,
+    sizes TEXT NOT NULL, notes TEXT, budget REAL, auto_buy_max REAL, address TEXT, created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS gift_people_name ON gift_people (user_id, name COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS gift_occasions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, person_id TEXT NOT NULL, kind TEXT NOT NULL,
+    month INTEGER NOT NULL, day INTEGER NOT NULL, year INTEGER, label TEXT, source TEXT NOT NULL,
+    UNIQUE (person_id, kind, month, day)
+);
+CREATE TABLE IF NOT EXISTS gift_prefs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, person_id TEXT NOT NULL, text TEXT NOT NULL,
+    kind TEXT NOT NULL, source TEXT NOT NULL, at TEXT NOT NULL, UNIQUE (person_id, text, kind)
+);
+CREATE TABLE IF NOT EXISTS gift_policy (user_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS gift_plans (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, person_id TEXT NOT NULL, occasion_id TEXT NOT NULL,
+    on_date TEXT NOT NULL, budget REAL NOT NULL, status TEXT NOT NULL, agent_id TEXT, mandate_id TEXT,
+    options TEXT, chosen INTEGER, request_id TEXT, note TEXT, feedback TEXT, created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL, UNIQUE (occasion_id, on_date)
+);
+CREATE TABLE IF NOT EXISTS gift_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, person_id TEXT NOT NULL, title TEXT NOT NULL,
+    year INTEGER NOT NULL, amount REAL, plan_id TEXT, source TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gift_catalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, merchant TEXT NOT NULL, price REAL NOT NULL,
+    data TEXT NOT NULL, UNIQUE (title, merchant)
+);
 CREATE TABLE IF NOT EXISTS shadow_reviews (request_id TEXT PRIMARY KEY, would_buy INTEGER NOT NULL, at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shadow_matches (
     request_id TEXT PRIMARY KEY, tx_id TEXT NOT NULL, tx_date TEXT NOT NULL, tx_amount REAL NOT NULL,
@@ -538,6 +567,132 @@ class Ledger:
             "SELECT COALESCE(SUM(points), 0) AS s FROM events WHERE user_id = ? AND agent_id = ? AND task_type = ? "
             "AND kind = ?", (user_id, agent_id, task_type, kind)).fetchone()
         return float(row["s"])
+
+    # --- gift concierge (spec section 3k) ---
+    def put_person(self, row: dict) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO gift_people VALUES (:id, :user_id, :name, :relationship, :sizes, :notes, :budget, "
+                ":auto_buy_max, :address, :created_at) ON CONFLICT (id) DO UPDATE SET name = excluded.name, "
+                "relationship = excluded.relationship, sizes = excluded.sizes, notes = excluded.notes, "
+                "budget = excluded.budget, auto_buy_max = excluded.auto_buy_max, address = excluded.address",
+                {**row, "sizes": json.dumps(row.get("sizes") or {})})
+
+    def people(self, user_id: str) -> list[dict]:
+        return [{**dict(r), "sizes": json.loads(r["sizes"])} for r in self.db.execute(
+            "SELECT * FROM gift_people WHERE user_id = ? ORDER BY name COLLATE NOCASE", (user_id,))]
+
+    def person(self, user_id: str, ref: str) -> dict | None:
+        """By id, or by name (case-insensitive)."""
+        r = self.db.execute("SELECT * FROM gift_people WHERE user_id = ? AND (id = ? OR name = ? COLLATE NOCASE)",
+                            (user_id, ref, ref)).fetchone()
+        return {**dict(r), "sizes": json.loads(r["sizes"])} if r else None
+
+    def put_occasion(self, row: dict) -> bool:
+        with self.db:
+            return self.db.execute(
+                "INSERT OR IGNORE INTO gift_occasions VALUES (:id, :user_id, :person_id, :kind, :month, :day, :year, "
+                ":label, :source)", row).rowcount > 0
+
+    def occasions(self, user_id: str, person_id: str | None = None) -> list[dict]:
+        q, args = "SELECT * FROM gift_occasions WHERE user_id = ?", [user_id]
+        if person_id:
+            q += " AND person_id = ?"
+            args.append(person_id)
+        return [dict(r) for r in self.db.execute(q + " ORDER BY month, day", args)]
+
+    def delete_occasion(self, user_id: str, occasion_id: str) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM gift_occasions WHERE user_id = ? AND id = ?",
+                                   (user_id, occasion_id)).rowcount > 0
+
+    def add_pref(self, user_id: str, person_id: str, text: str, kind: str, source: str, at: datetime) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO gift_prefs (user_id, person_id, text, kind, source, at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (person_id, text, kind) DO UPDATE SET source = excluded.source, at = excluded.at",
+                (user_id, person_id, text, kind, source, at.isoformat()))
+
+    def prefs(self, person_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT text, kind, source, at FROM gift_prefs WHERE person_id = ? ORDER BY id", (person_id,))]
+
+    def remove_pref(self, person_id: str, text: str) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM gift_prefs WHERE person_id = ? AND text = ? COLLATE NOCASE",
+                                   (person_id, text)).rowcount > 0
+
+    def gift_policy(self, user_id: str) -> dict:
+        r = self.db.execute("SELECT data FROM gift_policy WHERE user_id = ?", (user_id,)).fetchone()
+        return json.loads(r["data"]) if r else {}
+
+    def put_gift_policy(self, user_id: str, data: dict) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO gift_policy VALUES (?, ?)", (user_id, json.dumps(data)))
+
+    def put_plan(self, row: dict) -> bool:
+        with self.db:
+            return self.db.execute(
+                "INSERT OR IGNORE INTO gift_plans (id, user_id, person_id, occasion_id, on_date, budget, status, "
+                "agent_id, created_at, updated_at) VALUES (:id, :user_id, :person_id, :occasion_id, :on_date, "
+                ":budget, :status, :agent_id, :at, :at)", row).rowcount > 0
+
+    def update_plan(self, plan_id: str, at: datetime, **fields) -> None:
+        allowed = {"status", "mandate_id", "options", "chosen", "request_id", "note", "feedback", "budget",
+                   "agent_id"}
+        if set(fields) - allowed:
+            raise ValueError(f"can only update {sorted(allowed)}")
+        if "options" in fields and fields["options"] is not None:
+            fields["options"] = json.dumps(fields["options"])
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self.db:
+            self.db.execute(f"UPDATE gift_plans SET {sets}, updated_at = ? WHERE id = ?",
+                            (*fields.values(), at.isoformat(), plan_id))
+
+    def plan(self, plan_id: str) -> dict | None:
+        r = self.db.execute("SELECT * FROM gift_plans WHERE id = ?", (plan_id,)).fetchone()
+        return self._plan_row(r) if r else None
+
+    def plans(self, user_id: str, statuses: tuple[str, ...] | None = None) -> list[dict]:
+        q, args = "SELECT * FROM gift_plans WHERE user_id = ?", [user_id]
+        if statuses:
+            q += f" AND status IN ({','.join('?' * len(statuses))})"
+            args += list(statuses)
+        return [self._plan_row(r) for r in self.db.execute(q + " ORDER BY on_date, id", args)]
+
+    def plans_for_agent(self, agent_id: str, statuses: tuple[str, ...]) -> list[dict]:
+        q = f"SELECT * FROM gift_plans WHERE agent_id = ? AND status IN ({','.join('?' * len(statuses))})"
+        return [self._plan_row(r) for r in self.db.execute(q + " ORDER BY on_date", (agent_id, *statuses))]
+
+    @staticmethod
+    def _plan_row(r) -> dict:
+        d = dict(r)
+        d["options"] = json.loads(d["options"]) if d["options"] else []
+        return d
+
+    def add_gift_history(self, user_id: str, person_id: str, title: str, year: int, amount: float | None,
+                         plan_id: str | None, source: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO gift_history (user_id, person_id, title, year, amount, plan_id, source) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)", (user_id, person_id, title, year, amount, plan_id, source))
+
+    def gift_history(self, person_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT title, year, amount, plan_id, source FROM gift_history WHERE person_id = ? ORDER BY year DESC, id DESC",
+            (person_id,))]
+
+    def gift_spend(self, user_id: str, year: int) -> float:
+        r = self.db.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM gift_history WHERE user_id = ? AND year = ? "
+                            "AND plan_id IS NOT NULL", (user_id, year)).fetchone()
+        return float(r["s"])
+
+    def put_catalog(self, title: str, merchant: str, price: float, data: dict) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO gift_catalog (title, merchant, price, data) VALUES (?, ?, ?, ?)",
+                            (title, merchant, price, json.dumps(data)))
+
+    def catalog(self) -> list[dict]:
+        return [json.loads(r["data"]) for r in self.db.execute("SELECT data FROM gift_catalog ORDER BY id")]
 
     # --- shadow mode (spec section 3j) ---
     def put_shadow(self, user_id: str, agent_id: str, card: str, at: datetime) -> None:

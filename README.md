@@ -68,7 +68,7 @@ Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config
 }
 ```
 
-The agent gets five core tools: `list_mandates`, `get_limits`, `get_account`, `check_merchant` and `request_spend`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
+The agent gets five core tools: `list_mandates`, `get_limits`, `get_account`, `check_merchant` and `request_spend`. For gifts it also gets `get_gift_tasks`, `propose_gift_options`, `note_gift_preference` and `gift_ordered`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
 
 ## Merchant trust and purchase confidence
 
@@ -172,6 +172,29 @@ python -m earnest shadow live --user user_demo --agent agent_shopper --allowance
 In shadow mode the agent's requests get earnest's real decision (`status: shadow`, `shadow.would_be`), but never a card, never money and never trust points from the decision itself. When your card shows you bought what it proposed, that's a match, worth a little trust, capped so shadow mode alone can't reach `established`. The report says when it's ready: enough reviews where earnest agreed with you, or enough matches, and no would-be violations. Going live opens an agent account, so its first real spending is capped from day one.
 
 On the sample statements with the default profile, `replay` shows what earning trust changes: a `new` agent would have bought 22% of the last 60 days' purchases without asking, an `established` one 97%. Rules: [spec/SPEC.md](spec/SPEC.md) section 3j.
+
+## Gift concierge: one less thing to remember
+
+earnest keeps the birthdays and anniversaries of people you care about, and has a gift ready before each one: within budget, matched to what they like, paid from money you set aside.
+
+```bash
+python -m earnest gifts import-calendar examples/gifts/birthdays.ics --user user_demo
+python -m earnest gifts import-people examples/gifts/people.csv --user user_demo
+python -m earnest gifts like Priya "Le Creuset dutch oven" --pref wish --source wishlist --user user_demo
+python -m earnest gifts policy --user user_demo --agent agent_shopper --annual-budget 1500
+python -m earnest gifts plan --user user_demo          # run daily: plans dates inside the lead time
+python -m earnest gifts show g_123 --user user_demo    # shortlist, scores and reasons
+python -m earnest gifts approve g_123 --user user_demo # or --option 2
+python -m earnest gifts feedback g_123 loved --user user_demo
+```
+
+1. **Before each date**, earnest opens a plan with a budget: yours for that person, or guidance for the relationship (friend $40, parent $100, spouse $150, …). It's 1.5× for milestones and capped by your yearly gift budget.
+2. **A shopping agent** gets the brief through MCP (`get_gift_tasks`): who it's for, the occasion, the budget, their wishes, likes and things to avoid, what they've had before, and your gift cards. The address isn't included until you approve.
+3. **It proposes options** (`propose_gift_options`). earnest ranks them on fit, budget, arrival before the date, ratings, and whether a gift card you linked covers it. It rules out anything over budget, disliked, late, already given, or from an untrusted store.
+4. **The best one comes to you** through your usual approval link, with alternatives. Or, if you turned on `--auto-buy` and set someone's `--auto-buy-max`, it's bought straight away within that amount. Tier caps, store checks and the agent's account still apply.
+5. **The agent buys and sends it**, with the address, an order-by date and a gift message. Your feedback ("loved", "returned") teaches the next gift and counts toward the agent's trust.
+
+Preferences come from you, from what an agent heard in your own conversations, or from wishlists and public posts you point it to. earnest doesn't go through anyone's accounts. Rules: [spec/SPEC.md](spec/SPEC.md) section 3k.
 
 ## After the purchase, and for the whole household
 
@@ -294,6 +317,7 @@ earnest/           the gateway
   scoring.py       trust points and decay
   accounts.py      agent accounts: allowance, gift cards, prepaid cards
   shadow.py        shadow mode: card profile, matching, readiness
+  gifting.py       gift concierge: people, dates, budgets, option ranking
   ledger.py        SQLite ledger
   gateway.py       ties it together
   backends/mock.py simulated scoped, expiring cards

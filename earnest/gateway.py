@@ -308,6 +308,7 @@ class Gateway:
             decision = Decision(request_id, "denied", [*prior, "user_denied"], t.name,
                                 confidence=json.loads(row["decision"]).get("confidence"))
             self.ledger.update_request(request_id, "denied", decision.to_dict())
+            self._sync_gift_plan(request_id, decision)
             return decision
 
         profile = self.profile(mandate.user_id)
@@ -317,6 +318,7 @@ class Gateway:
         self.ledger.update_request(request_id, "approved", decision.to_dict())
         self.ledger.add_points(mandate.user_id, req.agent_id, mandate.task_type,
                                "purchase_approved", PURCHASE_APPROVED, request_id, now)
+        self._sync_gift_plan(request_id, decision)
         return decision
 
     def report_outcome(self, outcome: Outcome | dict) -> list[dict]:
@@ -1220,3 +1222,521 @@ class Gateway:
                 "share_automatic": round(len(results["approved"]) / n, 2) if n else None,
                 "top_reasons": [{"reason": r, "count": c} for r, c in reasons.most_common(5)],
                 "examples": {"asked": results["escalated"][:5], "blocked": results["denied"][:5]}}
+
+    # --- gift concierge (spec section 3k) ---
+    def _person(self, user_id: str, ref: str) -> dict:
+        p = self.ledger.person(user_id, ref)
+        if p is None:
+            raise ValidationError(f"no one called {ref!r}; add them with `earnest gifts add-person`")
+        return p
+
+    def gift_policy(self, user_id: str) -> dict:
+        from .gifting import DEFAULT_LEAD_DAYS
+        return {"agent_id": None, "lead_days": DEFAULT_LEAD_DAYS, "annual_budget": None, "auto_buy": False,
+                "relationship_budgets": {}, **self.ledger.gift_policy(user_id)}
+
+    def set_gift_policy(self, user_id: str, **changes) -> dict:
+        """Who shops (agent_id), how early (lead_days), the yearly gift budget, budgets by
+        relationship, and the master switch for buying without asking (auto_buy)."""
+        policy = self.gift_policy(user_id)
+        for k, v in changes.items():
+            if v is None:
+                continue
+            if k not in policy:
+                raise ValidationError(f"unknown gift policy field: {k}")
+            if k == "lead_days" and not (1 <= int(v) <= 90):
+                raise ValidationError("lead_days must be 1-90")
+            if k == "annual_budget" and float(v) < 0:
+                raise ValidationError("annual_budget must be >= 0")
+            if k == "relationship_budgets":
+                if not isinstance(v, dict) or any(float(x) < 0 for x in v.values()):
+                    raise ValidationError("relationship_budgets must map relationships to amounts >= 0")
+                v = {**policy["relationship_budgets"], **{str(a).lower(): float(b) for a, b in v.items()}}
+            policy[k] = v
+        self.ledger.put_gift_policy(user_id, policy)
+        return policy
+
+    def add_person(self, user_id: str, name: str, relationship: str | None = None, *, budget: float | None = None,
+                   auto_buy_max: float | None = None, address: str | None = None, sizes: dict | None = None,
+                   notes: str | None = None, likes: list[str] | None = None, dislikes: list[str] | None = None,
+                   wishes: list[str] | None = None) -> dict:
+        """Add someone, or update them (matched by name). Unset fields keep their old values."""
+        name = (name or "").strip()
+        if not name:
+            raise ValidationError("name is required")
+        for k, v in (("budget", budget), ("auto_buy_max", auto_buy_max)):
+            if v is not None and v < 0:
+                raise ValidationError(f"{k} must be >= 0")
+        old = self.ledger.person(user_id, name) or {}
+        row = {"id": old.get("id") or f"p_{uuid.uuid4().hex[:8]}", "user_id": user_id, "name": old.get("name", name),
+               "relationship": (relationship or old.get("relationship") or "other").lower(),
+               "sizes": {**old.get("sizes", {}), **(sizes or {})}, "notes": notes or old.get("notes"),
+               "budget": budget if budget is not None else old.get("budget"),
+               "auto_buy_max": auto_buy_max if auto_buy_max is not None else old.get("auto_buy_max"),
+               "address": address or old.get("address"), "created_at": old.get("created_at") or self.clock().isoformat()}
+        self.ledger.put_person(row)
+        for kind, items in (("like", likes), ("dislike", dislikes), ("wish", wishes)):
+            for text in items or []:
+                self.add_gift_preference(user_id, row["id"], text, kind, "you")
+        return self.person_card(user_id, row["id"])
+
+    def person_card(self, user_id: str, ref: str) -> dict:
+        p = self._person(user_id, ref)
+        return {**{k: p[k] for k in ("id", "name", "relationship", "budget", "auto_buy_max", "sizes", "notes")},
+                "address_on_file": bool(p["address"]),
+                "occasions": [{k: o[k] for k in ("id", "kind", "month", "day", "year", "label")}
+                              for o in self.ledger.occasions(user_id, p["id"])],
+                "preferences": self.ledger.prefs(p["id"]), "given_before": self.ledger.gift_history(p["id"])}
+
+    def add_occasion(self, user_id: str, person: str, kind: str, when: str, label: str | None = None,
+                     source: str = "you") -> dict:
+        from .gifting import KINDS, parse_md
+        if kind not in KINDS:
+            raise ValidationError(f"kind must be one of {', '.join(KINDS)}")
+        p = self._person(user_id, person)
+        year, month, day = parse_md(when)
+        row = {"id": f"o_{uuid.uuid4().hex[:8]}", "user_id": user_id, "person_id": p["id"], "kind": kind,
+               "month": month, "day": day, "year": year, "label": label, "source": source}
+        added = self.ledger.put_occasion(row)
+        return {"person": p["name"], "kind": kind, "month": month, "day": day, "year": year, "added": added}
+
+    def add_gift_preference(self, user_id: str, person: str, text: str, kind: str = "like",
+                            source: str = "you") -> dict:
+        """Something a person likes, dislikes or wishes for, and where it came from: `you`,
+        `wishlist` (they asked for it), `conversation` (an agent heard it in your chats), `social`
+        (a public post or wishlist you pointed to) or `feedback` (how a past gift went)."""
+        from .gifting import SOURCES
+        if kind not in ("like", "dislike", "wish"):
+            raise ValidationError("kind must be like, dislike or wish")
+        if source not in SOURCES:
+            raise ValidationError(f"source must be one of {', '.join(SOURCES)}")
+        text = (text or "").strip()
+        if not text or len(text) > 200:
+            raise ValidationError("preference text must be 1-200 characters")
+        p = self._person(user_id, person)
+        self.ledger.add_pref(user_id, p["id"], text, kind, source, self.clock())
+        return {"person": p["name"], "text": text, "kind": kind, "source": source}
+
+    def import_people(self, user_id: str, text: str) -> dict:
+        from .gifting import parse_people_csv
+        rows = parse_people_csv(text)
+        added = 0
+        for r in rows:
+            existed = self.ledger.person(user_id, r["name"]) is not None
+            self.add_person(user_id, r["name"], r["relationship"], budget=r.get("budget"),
+                            auto_buy_max=r.get("auto_buy_max"), likes=r["likes"], dislikes=r["dislikes"])
+            for kind, y, m, d in r["occasions"]:
+                self.add_occasion(user_id, r["name"], kind, f"{y:04d}-{m:02d}-{d:02d}" if y else f"{m:02d}-{d:02d}",
+                                  source="contacts")
+            added += not existed
+        return {"people": len(rows), "new": added}
+
+    def import_calendar(self, user_id: str, text: str) -> dict:
+        """Birthdays and anniversaries from a calendar export. New names are added as `other`;
+        set their relationship (and so their budget) with `earnest gifts add-person`."""
+        from .gifting import parse_ics
+        events = parse_ics(text)
+        new_people, added = [], 0
+        for e in events:
+            if self.ledger.person(user_id, e["name"]) is None:
+                self.add_person(user_id, e["name"])
+                new_people.append(e["name"])
+            when = f"{e['year']:04d}-{e['month']:02d}-{e['day']:02d}" if e["year"] else f"{e['month']:02d}-{e['day']:02d}"
+            added += self.add_occasion(user_id, e["name"], e["kind"], when, source="calendar")["added"]
+        return {"events": len(events), "occasions_added": added, "new_people": new_people,
+                "note": "set relationships so budgets fit: earnest gifts add-person NAME --relationship friend"
+                        if new_people else None}
+
+    def _occasion_obj(self, row: dict):
+        from .gifting import Occasion
+        return Occasion(row["id"], row["person_id"], row["kind"], row["month"], row["day"], row["year"], row["label"])
+
+    def _person_obj(self, row: dict):
+        from .gifting import Person
+        return Person(row["id"], row["name"], row["relationship"], row["sizes"], row["notes"], row["budget"],
+                      row["auto_buy_max"], row["address"])
+
+    def upcoming_gifts(self, user_id: str, days: int = 60) -> list[dict]:
+        from .gifting import upcoming
+        today = self.clock().date()
+        people = {p["id"]: p for p in self.ledger.people(user_id)}
+        plans = {(p["occasion_id"], p["on_date"]): p for p in self.ledger.plans(user_id)}
+        out = []
+        for occ, on in upcoming([self._occasion_obj(o) for o in self.ledger.occasions(user_id)], today, days):
+            p = people.get(occ.person_id)
+            if p is None:
+                continue
+            plan = plans.get((occ.id, on.isoformat()))
+            out.append({"date": on.isoformat(), "in_days": (on - today).days, "what": occ.describe(p["name"], on),
+                        "person": p["name"], "plan": plan["id"] if plan else None,
+                        "status": plan["status"] if plan else "not planned yet"})
+        return out
+
+    def plan_gifts(self, user_id: str) -> list[dict]:
+        """Open a gift plan for every occasion inside the lead window (run daily). Plans whose
+        date passed without a purchase are marked missed."""
+        from .gifting import budget_for, upcoming
+        policy = self.gift_policy(user_id)
+        now = self.clock()
+        today = now.date()
+        for plan in self.ledger.plans(user_id, ("open", "awaiting_approval", "declined")):
+            if date.fromisoformat(plan["on_date"]) < today:
+                self.ledger.update_plan(plan["id"], now, status="missed")
+        people = {p["id"]: p for p in self.ledger.people(user_id)}
+        created = []
+        for occ, on in upcoming([self._occasion_obj(o) for o in self.ledger.occasions(user_id)], today,
+                                policy["lead_days"]):
+            p = people.get(occ.person_id)
+            if p is None:
+                continue
+            remaining = None
+            if policy["annual_budget"] is not None:
+                committed = sum(x["budget"] for x in self.ledger.plans(user_id, ("open", "awaiting_approval"))
+                                if x["on_date"][:4] == str(on.year))
+                remaining = policy["annual_budget"] - self.ledger.gift_spend(user_id, on.year) - committed
+            budget, why = budget_for(self._person_obj(p), occ, on, policy["relationship_budgets"], remaining)
+            plan_id = f"g_{uuid.uuid4().hex[:10]}"
+            if self.ledger.put_plan({"id": plan_id, "user_id": user_id, "person_id": p["id"], "occasion_id": occ.id,
+                                     "on_date": on.isoformat(), "budget": budget,
+                                     "status": "open" if budget > 0 else "declined",
+                                     "agent_id": policy["agent_id"], "at": now.isoformat()}):
+                if budget <= 0:
+                    self.ledger.update_plan(plan_id, now, note="no gift budget left this year")
+                created.append({"plan": plan_id, "what": occ.describe(p["name"], on), "date": on.isoformat(),
+                                "budget": budget, "budget_why": why})
+        return created
+
+    def _plan(self, plan_id: str) -> dict:
+        plan = self.ledger.plan(plan_id)
+        if plan is None:
+            raise ValidationError(f"unknown gift plan: {plan_id}")
+        return plan
+
+    def _plan_context(self, plan: dict):
+        person = self.ledger.person(plan["user_id"], plan["person_id"])
+        occ = next(o for o in self.ledger.occasions(plan["user_id"], plan["person_id"]) if o["id"] == plan["occasion_id"])
+        return person, self._occasion_obj(occ), date.fromisoformat(plan["on_date"])
+
+    def _gift_cards(self, user_id: str, agent_id: str | None) -> dict[str, float]:
+        """Gift-card balance the agent could use per store, keyed by the store as written on the card."""
+        if not agent_id or self.ledger.get_account(user_id, agent_id) is None:
+            return {}
+        out: dict[str, float] = {}
+        for f in self._funding(user_id, agent_id):
+            if f.kind == "gift_card":
+                out[f.merchant] = max(out.get(f.merchant, 0.0), f.balance)
+        return out
+
+    def _spendable(self, user_id: str, agent_id: str | None) -> dict | None:
+        """What the shopping agent's account can pay with, if it has one (3i)."""
+        if not agent_id or self.ledger.get_account(user_id, agent_id) is None:
+            return None
+        sources = self._funding(user_id, agent_id)
+        return {"allowance": round(sum(f.balance for f in sources if f.kind == ALLOWANCE), 2),
+                "prepaid": round(max([f.balance for f in sources if f.kind == "prepaid"], default=0.0), 2),
+                "note": "a purchase must fit one source: a gift card at its store, the allowance, or a prepaid card"}
+
+    def gift_brief(self, plan_id: str) -> dict:
+        """What a shopping agent needs to find the right gift. No address until it's approved."""
+        from .gifting import Preference
+        plan = self._plan(plan_id)
+        person, occ, on = self._plan_context(plan)
+        prefs = [Preference(x["text"], x["kind"], x["source"]) for x in self.ledger.prefs(person["id"])]
+        today = self.clock().date()
+        return {
+            "plan": plan_id, "status": plan["status"], "for": person["name"], "relationship": person["relationship"],
+            "occasion": occ.describe(person["name"], on), "date": on.isoformat(), "in_days": (on - today).days,
+            "budget": plan["budget"], "currency": "USD",
+            "wishes": [f"{p.text} ({p.source})" for p in prefs if p.kind == "wish"],
+            "likes": [f"{p.text} ({p.source})" for p in prefs if p.kind == "like"],
+            "avoid": [p.text for p in prefs if p.kind == "dislike"],
+            "sizes": person["sizes"], "notes": person["notes"],
+            "given_before": [g["title"] for g in self.ledger.gift_history(person["id"])][:10],
+            "gift_cards": [{"store": k, "balance": round(v, 2)}
+                           for k, v in self._gift_cards(plan["user_id"], plan["agent_id"]).items()],
+            "account": self._spendable(plan["user_id"], plan["agent_id"]),
+            "note": plan["note"],
+            "how": "Research 3-8 options that fit, then call propose_gift_options. Include eta_days so earnest "
+                   "can check it arrives in time; mark e-gifts and experiences as digital.",
+        }
+
+    def propose_gifts(self, plan_id: str, options: list[dict] | None = None, agent_id: str | None = None) -> dict:
+        """Rank options for a plan (an agent's research, or the popular-items catalog when none are
+        given), then put the best one forward: for your approval, or bought straight away if
+        you've authorized that for this person and price."""
+        from .gifting import Option, Preference, rank
+        plan = self._plan(plan_id)
+        if plan["status"] not in ("open", "declined", "awaiting_approval"):
+            raise ValidationError(f"plan {plan_id} is {plan['status']}")
+        if agent_id and plan["agent_id"] and agent_id != plan["agent_id"]:
+            raise ValidationError(f"plan {plan_id} belongs to {plan['agent_id']}")
+        agent_id = plan["agent_id"] or agent_id
+        if not agent_id:
+            raise ValidationError("no shopping agent: set one with `earnest gifts policy --agent ...`")
+        now = self.clock()
+        if plan["agent_id"] is None:
+            self.ledger.update_plan(plan_id, now, agent_id=agent_id)
+            plan["agent_id"] = agent_id
+        opts = [Option.from_dict(o) for o in (options if options is not None else self.ledger.catalog())]
+        if not opts:
+            raise ValidationError("no options: pass some, or load popular items with `earnest gifts catalog`")
+        if len(opts) > 20:
+            raise ValidationError("at most 20 options at a time")
+        person, occ, on = self._plan_context(plan)
+        prefs = [Preference(x["text"], x["kind"], x["source"]) for x in self.ledger.prefs(person["id"])]
+        overrides = self.ledger.merchant_overrides(plan["user_id"])
+        cards = self._gift_cards(plan["user_id"], agent_id)
+        card_by_option = {}
+        for o in opts:
+            keys = self.merchants.canonical(o.merchant)
+            card_by_option[o.merchant] = max([v for k, v in cards.items() if keys & self.merchants.canonical(k)],
+                                             default=0.0)
+        ranked = rank(opts, person=self._person_obj(person), prefs=prefs, budget=plan["budget"], on=on,
+                      today=now.date(), gift_cards=card_by_option,
+                      merchant_status={o.merchant: self.merchants.check(o.merchant, overrides).status for o in opts},
+                      given_before=[g["title"] for g in self.ledger.gift_history(person["id"])])
+        shortlist = ranked[:5]
+        self.ledger.update_plan(plan_id, now, options=shortlist)
+        if not any(r["usable"] for r in shortlist):
+            problems = sorted({p.split(":")[0] for r in shortlist for p in r["problems"]})
+            self.ledger.update_plan(plan_id, now, status="open",
+                                    note=f"no option fit ({', '.join(problems) or 'weak match'}); try others")
+            out = {"plan": plan_id, "status": "open", "shortlist": shortlist,
+                   "note": "none of these fit; propose others"}
+            stretch = [r for r in shortlist if r["problems"] and all(p.startswith("over_budget") for p in r["problems"])]
+            if stretch:
+                o = stretch[0]["option"]
+                out["stretch"] = (f"the best fit, {o['title']} (${o['price']:.2f}), is only over budget: "
+                                  f"earnest gifts budget {plan_id} {o['price']:g}  then  "
+                                  f"earnest gifts approve {plan_id} --option {stretch[0]['index']}")
+            return out
+        return self._put_forward(plan_id, None, by_user=False)
+
+    def _gift_mandate(self, plan: dict, option: dict, approval: str) -> str:
+        person, occ, on = self._plan_context(plan)
+        mandate_id = f"gift_{plan['id']}"
+        self.add_mandate({
+            "id": mandate_id, "user_id": plan["user_id"], "task_type": "gift_shopping", "mode": "gift",
+            "intent": f"{occ.describe(person['name'], on)} gift: {option['title']}",
+            "budget": {"currency": "USD", "max": plan["budget"]}, "deadline": on.isoformat(), "approval": approval,
+            "secrecy": True, "ship_to": "recipient" if person["address"] else "self",
+            "recipient": {"name": person["name"], "plan": plan["id"]}})
+        return mandate_id
+
+    def _put_forward(self, plan_id: str, index: int | None, by_user: bool) -> dict:
+        """Turn a shortlisted option into a spend request under the plan's gift mandate. Unless
+        you authorized buying for this person at this price, the mandate needs your approval, so
+        the request reaches you through the usual approval links and `earnest pending`."""
+        plan = self._plan(plan_id)
+        policy = self.gift_policy(plan["user_id"])
+        person, occ, on = self._plan_context(plan)
+        usable = [r for r in plan["options"] if r["usable"]]
+        if index is not None:
+            pick = next((r for r in plan["options"] if r["index"] == index), None)
+            if pick is None:
+                raise ValidationError(f"no option {index} on plan {plan_id}; see `earnest gifts show {plan_id}`")
+            if pick["problems"]:
+                raise ValidationError(f"option {index} doesn't fit: {', '.join(pick['problems'])}")
+            candidates = [pick]
+        else:
+            candidates = usable
+        now = self.clock()
+        if plan["request_id"]:   # switching options: withdraw the earlier request (costs the agent nothing)
+            old = self.ledger.get_request(plan["request_id"])
+            if old and old["status"] == "escalated":
+                self.resolve(plan["request_id"], approve=False)
+        tried = []
+        for r in candidates:
+            o = r["option"]
+            authorized = (not by_user and policy["auto_buy"] and person["auto_buy_max"] is not None
+                          and o["price"] <= person["auto_buy_max"])
+            mandate_id = self._gift_mandate(plan, o, "auto" if (authorized or by_user) else "always")
+            why = "; ".join(r["why"][:2])
+            d = self.request_spend({
+                "agent_id": plan["agent_id"], "mandate_id": mandate_id, "amount": o["price"], "merchant": o["merchant"],
+                "category": o.get("category", "gifts"), "item": o["title"], "product_id": o.get("product_id"),
+                "reason": f"Gift: {occ.describe(person['name'], on)} on {on:%b} {on.day}. {why}".strip()})
+            if d.status == "escalated" and by_user:
+                try:
+                    d = self.resolve(d.request_id, approve=True)   # this is your approval
+                except ValidationError as e:   # e.g. the agent's account can't cover it yet
+                    self.ledger.update_plan(plan_id, now, chosen=r["index"], request_id=d.request_id,
+                                            status="awaiting_approval", note=str(e))
+                    raise
+            if d.status == "denied":
+                tried.append({"option": o["title"], "reasons": d.reasons})
+                continue
+            self.ledger.update_plan(plan_id, now, chosen=r["index"], request_id=d.request_id,
+                                    status="approved" if d.status == "approved" else "awaiting_approval", note=None)
+            if d.status == "approved":
+                self._record_gift(plan_id, d)
+            return {"plan": plan_id, "status": self._plan(plan_id)["status"], "choice": o, "why": r["why"],
+                    "request_id": d.request_id, "reasons": d.reasons,
+                    "alternatives": [{"index": x["index"], "title": x["option"]["title"], "price": x["option"]["price"],
+                                      "merchant": x["option"]["merchant"], "score": x["score"]}
+                                     for x in usable if x["index"] != r["index"]][:3],
+                    "next": ("the agent can buy it now" if d.status == "approved" else
+                             f"approve: earnest approve {d.request_id}   or pick another: "
+                             f"earnest gifts approve {plan_id} --option N")}
+        self.ledger.update_plan(plan_id, now, status="open", note="earnest turned down every option: " +
+                                "; ".join(f"{t['option']} ({', '.join(t['reasons'])})" for t in tried))
+        return {"plan": plan_id, "status": "open", "tried": tried, "note": "propose other options"}
+
+    def _record_gift(self, plan_id: str, decision: Decision) -> None:
+        plan = self._plan(plan_id)
+        o = next(r["option"] for r in plan["options"] if r["index"] == plan["chosen"])
+        self.ledger.add_gift_history(plan["user_id"], plan["person_id"], o["title"], int(plan["on_date"][:4]),
+                                     o["price"], plan_id, "earnest")
+
+    def _sync_gift_plan(self, request_id: str, decision: Decision) -> None:
+        """Keep a gift plan in step when its request is approved or denied through the usual paths."""
+        row = self.ledger.get_request(request_id)
+        if row is None or not row["mandate_id"].startswith("gift_g_"):
+            return
+        plan = self.ledger.plan(row["mandate_id"][len("gift_"):])
+        if plan is None or plan["request_id"] != request_id or plan["status"] != "awaiting_approval":
+            return
+        if decision.status == "approved":
+            self.ledger.update_plan(plan["id"], self.clock(), status="approved")
+            self._record_gift(plan["id"], decision)
+        elif decision.status == "denied":
+            self.ledger.update_plan(plan["id"], self.clock(), status="declined",
+                                    note="you declined; pick another option or skip")
+
+    def set_gift_budget(self, plan_id: str, amount: float) -> dict:
+        """Change one gift's budget (yours to decide; agents can't). Re-checks the shortlist."""
+        from .gifting import Option, Preference, rank
+        plan = self._plan(plan_id)
+        if plan["status"] not in ("open", "declined", "awaiting_approval"):
+            raise ValidationError(f"plan {plan_id} is {plan['status']}")
+        if amount <= 0:
+            raise ValidationError("budget must be > 0")
+        now = self.clock()
+        self.ledger.update_plan(plan_id, now, budget=round(amount, 2))
+        if plan["options"]:   # re-score what's already shortlisted against the new budget
+            person, occ, on = self._plan_context(plan)
+            prefs = [Preference(x["text"], x["kind"], x["source"]) for x in self.ledger.prefs(person["id"])]
+            opts = [Option.from_dict(r["option"]) for r in sorted(plan["options"], key=lambda r: r["index"])]
+            overrides = self.ledger.merchant_overrides(plan["user_id"])
+            cards = self._gift_cards(plan["user_id"], plan["agent_id"])
+            ranked = rank(opts, person=self._person_obj(person), prefs=prefs, budget=amount, on=on,
+                          today=now.date(),
+                          gift_cards={o.merchant: max([v for k, v in cards.items() if self.merchants.canonical(o.merchant)
+                                                       & self.merchants.canonical(k)], default=0.0) for o in opts},
+                          merchant_status={o.merchant: self.merchants.check(o.merchant, overrides).status for o in opts},
+                          given_before=[g["title"] for g in self.ledger.gift_history(person["id"])])
+            old_index = {i: r["index"] for i, r in enumerate(sorted(plan["options"], key=lambda r: r["index"]))}
+            for r in ranked:
+                r["index"] = old_index[r["index"]]
+            self.ledger.update_plan(plan_id, now, options=ranked)
+        return self.gift_plan_view(plan_id)
+
+    def approve_gift(self, plan_id: str, option: int | None = None) -> dict:
+        """Approve the suggested gift, or pick another shortlisted option instead."""
+        plan = self._plan(plan_id)
+        if plan["status"] not in ("awaiting_approval", "declined", "open"):
+            raise ValidationError(f"plan {plan_id} is {plan['status']}")
+        if not plan["options"]:
+            raise ValidationError(f"plan {plan_id} has no options yet")
+        if option is None and plan["status"] == "awaiting_approval" and plan["request_id"]:
+            d = self.resolve(plan["request_id"], approve=True)
+            return {"plan": plan_id, "status": self._plan(plan_id)["status"], "request_id": d.request_id,
+                    "reasons": d.reasons}
+        return self._put_forward(plan_id, option if option is not None else plan["chosen"], by_user=True)
+
+    def skip_gift(self, plan_id: str, reason: str = "skipped by you") -> dict:
+        plan = self._plan(plan_id)
+        if plan["status"] in ("approved", "ordered", "done"):
+            raise ValidationError(f"plan {plan_id} is already {plan['status']}")
+        if plan["request_id"]:
+            old = self.ledger.get_request(plan["request_id"])
+            if old and old["status"] == "escalated":
+                self.resolve(plan["request_id"], approve=False)
+        self.ledger.update_plan(plan_id, self.clock(), status="skipped", note=reason)
+        return {"plan": plan_id, "status": "skipped"}
+
+    def gift_tasks(self, agent_id: str) -> list[dict]:
+        """For the shopping agent: plans to research, and approved gifts to buy and send."""
+        out = []
+        for plan in self.ledger.plans_for_agent(agent_id, ("open", "approved")):
+            if plan["status"] == "open":
+                out.append({"todo": "find options", **self.gift_brief(plan["id"])})
+            else:
+                out.append({"todo": "buy and send", **self.gift_purchase(plan["id"])})
+        return out
+
+    def gift_purchase(self, plan_id: str) -> dict:
+        """Everything needed to buy and send an approved gift, including the address."""
+        from .gifting import ship_by
+        plan = self._plan(plan_id)
+        if plan["status"] != "approved":
+            raise ValidationError(f"plan {plan_id} isn't approved")
+        person, occ, on = self._plan_context(plan)
+        o = next(r["option"] for r in plan["options"] if r["index"] == plan["chosen"])
+        decision = json.loads(self.ledger.get_request(plan["request_id"])["decision"])
+        n = occ.count(on)
+        message = {"birthday": f"Happy {_ordinal_word(n)}birthday, {person['name']}!",
+                   "anniversary": f"Happy {_ordinal_word(n)}anniversary!"}.get(occ.kind, f"Thinking of you, {person['name']}!")
+        sb = ship_by(on, o.get("eta_days"), o.get("digital", False))
+        return {"plan": plan_id, "for": person["name"], "occasion": occ.describe(person["name"], on),
+                "date": on.isoformat(), "item": o["title"], "merchant": o["merchant"], "price": o["price"],
+                "url": o.get("url"), "request_id": plan["request_id"],
+                "payment": decision.get("payment"), "credential": decision.get("credential"),
+                "ship_to": person["address"] or "you (no address on file for them)",
+                "order_by": sb.isoformat() if sb else None,
+                "buy_before": (decision.get("credential") or {}).get("expires_at"),
+                "gift_message": message,
+                "keep_secret": True, "after": f"call gift_ordered('{plan_id}') once the order is placed"}
+
+    def gift_ordered(self, plan_id: str, agent_id: str | None = None, order_ref: str | None = None) -> dict:
+        plan = self._plan(plan_id)
+        if agent_id and plan["agent_id"] != agent_id:
+            raise ValidationError(f"plan {plan_id} belongs to {plan['agent_id']}")
+        if plan["status"] != "approved":
+            raise ValidationError(f"plan {plan_id} is {plan['status']}, not approved")
+        self.ledger.update_plan(plan_id, self.clock(), status="ordered",
+                                note=f"order {order_ref}" if order_ref else "ordered")
+        return {"plan": plan_id, "status": "ordered"}
+
+    def gift_feedback(self, plan_id: str, how: str) -> dict:
+        """How the gift went: loved / liked / returned / disliked. It teaches the next gift (and
+        counts as your verdict on the purchase for the agent's trust)."""
+        if how not in ("loved", "liked", "returned", "disliked"):
+            raise ValidationError("feedback must be loved, liked, returned or disliked")
+        plan = self._plan(plan_id)
+        if plan["status"] not in ("approved", "ordered", "done"):
+            raise ValidationError(f"plan {plan_id} was never bought")
+        person, _, _ = self._plan_context(plan)
+        o = next(r["option"] for r in plan["options"] if r["index"] == plan["chosen"])
+        self.ledger.add_pref(plan["user_id"], person["id"], o["title"], "like" if how in ("loved", "liked") else "dislike",
+                             "feedback", self.clock())
+        events = []
+        if not self.ledger.has_outcome(plan["request_id"]):
+            events = self.report_outcome({"request_id": plan["request_id"],
+                                          "verdict": "accepted" if how in ("loved", "liked") else "rejected"})
+        self.ledger.update_plan(plan_id, self.clock(), status="done", feedback=how)
+        return {"plan": plan_id, "status": "done", "feedback": how, "trust_events": events}
+
+    def gift_plan_view(self, plan_id: str) -> dict:
+        plan = self._plan(plan_id)
+        person, occ, on = self._plan_context(plan)
+        return {"plan": plan_id, "status": plan["status"], "for": person["name"],
+                "occasion": occ.describe(person["name"], on), "date": on.isoformat(), "budget": plan["budget"],
+                "chosen": plan["chosen"], "request_id": plan["request_id"], "note": plan["note"],
+                "feedback": plan["feedback"],
+                "shortlist": [{"index": r["index"], "title": r["option"]["title"], "merchant": r["option"]["merchant"],
+                               "price": r["option"]["price"], "score": r["score"], "why": r["why"],
+                               "problems": r["problems"]} for r in plan["options"]]}
+
+    def load_gift_catalog(self, items: list[dict]) -> int:
+        """Popular items to fall back on when no agent has researched options."""
+        from .gifting import Option
+        for d in items:
+            o = Option.from_dict({**d, "source": d.get("source", "popular")})
+            self.ledger.put_catalog(o.title, o.merchant, o.price, o.to_dict())
+        return len(items)
+
+
+def _ordinal_word(n: int | None) -> str:
+    from .gifting import _ordinal
+    return f"{_ordinal(n)} " if n else ""

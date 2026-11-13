@@ -106,3 +106,11 @@ Next: a maintained blocklist feed connector, `OrderSource` connectors (retailer 
 - Shadow mode: card-labelled statement imports; a read-only card profile with suggested limits; point-in-time replay of a card's purchases at every tier; agents in shadow get real decisions but no money or points; proposals matched to later card purchases (small capped trust) and reviewed by the user; a readiness report that suggests going live with an agent account.
 
 Next: gift-card balance checks through retailer APIs, a bank-aggregator `TransactionSource` so shadow matching runs without exports, and per-category allowances.
+
+## Gift concierge (v0.5) — done
+
+- People, yearly occasions (manual, contacts CSV, calendar .ics), preferences with sources (wishlist, feedback, you, conversation, social, popular), gift policy (agent, lead time, yearly budget, relationship budgets, auto-buy switch).
+- Daily planning with budgets (milestones, yearly cap); option ranking (fit, budget, arrival, quality, linked gift cards; dislikes, repeats, late, untrusted ruled out); per-plan gift mandates through the usual spend/approval path; authorized auto-buy per person; addresses only after approval; feedback into preferences and trust.
+
+Next: price-drop and stock watching for shortlisted gifts, shared household gift lists, and reminders for occasions with no plan.
+

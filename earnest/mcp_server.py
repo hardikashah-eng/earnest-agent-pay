@@ -66,6 +66,51 @@ def get_account() -> dict:
 
 
 @mcp.tool()
+def get_gift_tasks() -> list[dict]:
+    """Gifts the user wants handled. `find options`: who it's for, the occasion and date, the
+    budget, their wishes / likes / things to avoid (with where each came from), sizes, what they've
+    been given before, and which gift cards you can pay with. `buy and send`: an approved gift
+    with payment, shipping address, order-by date and a gift message. Keep gifts secret."""
+    return _gateway.gift_tasks(AGENT_ID)
+
+
+@mcp.tool()
+def propose_gift_options(plan_id: str, options: list[dict]) -> dict:
+    """Propose 3-8 gift options for a plan. Each: title, merchant, price, and when you know them
+    category, url, product_id, eta_days (delivery time), rating (0-5), popularity (0-1), digital
+    (true for e-gifts and experiences). earnest ranks them on fit, budget, arrival before the date,
+    repeats and stores; the best goes to the user for approval, or is approved right away if
+    they authorized buying for this person at this price."""
+    try:
+        return _gateway.propose_gifts(plan_id, options, AGENT_ID)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def note_gift_preference(person: str, text: str, kind: str = "like", source: str = "conversation") -> dict:
+    """Record something you learned about what someone likes (`like`), dislikes (`dislike`) or
+    wants (`wish`). `source`: `conversation` (the user told you in chat), `wishlist` (a wishlist
+    they shared) or `social` (a public post the user pointed you to). Don't go looking through
+    people's accounts; only use what the user shared or pointed you to."""
+    if source not in ("conversation", "wishlist", "social"):
+        return {"status": "invalid", "error": "source must be conversation, wishlist or social"}
+    try:
+        return _gateway.add_gift_preference(USER_ID, person, text, kind, source)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
+def gift_ordered(plan_id: str, order_ref: str | None = None) -> dict:
+    """Tell earnest you placed the order for an approved gift."""
+    try:
+        return _gateway.gift_ordered(plan_id, AGENT_ID, order_ref)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
 def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category: str = "",
                    mandate_id: str = "", quantity: int = 1, product_id: str = "") -> dict:
     """Score a purchase before you request it. Returns a 0-1 confidence with four factors:
