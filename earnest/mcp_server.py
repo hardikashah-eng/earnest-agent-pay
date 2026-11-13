@@ -66,6 +66,18 @@ def get_account() -> dict:
 
 
 @mcp.tool()
+def evaluate_purchase(price: float, evaluation: dict) -> dict:
+    """Score a possible purchase on the user's rubric before asking to buy it: price (cost per
+    use against their hourly value), time saved, utility and added value, each 1-10, weighted by
+    their goals, plus the one-year net value (hours saved x hourly value + added value - price).
+    Says whether it meets their threshold. Nothing is bought or recorded."""
+    try:
+        return _gateway.score_purchase(USER_ID, price, evaluation)
+    except ValidationError as e:
+        return {"status": "invalid", "error": str(e)}
+
+
+@mcp.tool()
 def get_gift_tasks() -> list[dict]:
     """Gifts the user wants handled. `find options`: who it's for, the occasion and date, the
     budget, their wishes / likes / things to avoid (with where each came from), sizes, what they've
@@ -126,14 +138,20 @@ def check_merchant(merchant: str, item: str = "", amount: float = 0.0, category:
 @mcp.tool()
 def request_spend(mandate_id: str, amount: float, merchant: str, category: str, reason: str,
                   item: str = "", quantity: int = 1, product_id: str = "", recurring: bool = False, international: bool = False,
-                  ask_first: bool = False) -> dict:
+                  ask_first: bool = False, evaluation: dict | None = None) -> dict:
     """Ask to spend money for a mandate. Returns approved (with a scoped, expiring card, or a
     `payment` block saying which gift card / prepaid card of yours pays), escalated (waiting for
     the user), denied, or shadow (read-only mode: `shadow.would_be` is the decision you'd have
     got; nothing is bought), plus a confidence block. Name the `item` you
     are buying so the gateway can match it against the user's past purchases. Set
     ask_first=true when you're unsure: asking before acting is rewarded when it was needed.
-    Spending outside the mandate, or at an untrusted merchant, is penalized heavily."""
+    Spending outside the mandate, or at an untrusted merchant, is penalized heavily.
+    `evaluation` is your honest value estimate, scored on the user's rubric (see
+    evaluate_purchase): lifespan_months, uses_per_month (or total_uses), hours_saved_per_year,
+    solves (1-10), core (true/false), benefits ({stress, health, skill, social, comfort}: 0-3),
+    resale_value, added_value_usd. If the user turned the value gate on, requests without one,
+    or below their bar, come to them. The user later reviews what it was really worth;
+    overrating costs trust, accurate estimates earn it."""
     try:
         payload = {
             "agent_id": AGENT_ID, "mandate_id": mandate_id, "amount": amount, "merchant": merchant,
@@ -146,6 +164,8 @@ def request_spend(mandate_id: str, amount: float, merchant: str, category: str, 
             payload["quantity"] = quantity
         if product_id:
             payload["product_id"] = product_id  # ASIN or UPC/GTIN from the product page
+        if evaluation:
+            payload["evaluation"] = evaluation
         return _gateway.request_spend(payload).to_dict()
     except ValidationError as e:
         return {"status": "invalid", "error": str(e)}

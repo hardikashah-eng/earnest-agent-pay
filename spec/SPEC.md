@@ -56,6 +56,8 @@ Checks run in this order. The first group **denies** the request and counts as a
 
 9b. Purchase confidence is below the profile's `min_confidence` (section 3c).
 
+9c. The value gate is on and the request has no value estimate, too little of one, a score below the threshold, or a negative net value for a larger purchase (section 3l).
+
 Unknown mandates are denied without touching any score.
 
 Every decision carries a `confidence` block (score, level, the four factors with reasons, merchant status, history and signals) so the agent and the user can see why.
@@ -295,6 +297,73 @@ It reports `gift_ordered`.
 
 Each approved gift goes into the person's gift history, so it isn't given again.
 
+### 3l. Purchase evaluation
+
+A weighted rubric and a net-value check let a purchase be judged on numbers, and let completely different purchases be compared side by side. The agent estimates; you review afterwards; the gap shows how well the agent judges value.
+
+**Inputs** (`evaluation` on a spend request; all optional):
+- `lifespan_months` and `uses_per_month`, or `total_uses`
+- `hours_saved_per_year`
+- `solves` (1–10: how well it solves a specific problem) and `core` (a core, frequent function, or a nice-to-have)
+- `benefits` (`stress`, `health`, `skill`, `social`, `comfort`: 0–3 each)
+- `resale_value` and `added_value_usd` (dollars over a year)
+- `scores`: direct 1–10 scores that override the inputs for a metric
+
+**Metrics**, each 1–10 (`h` = your hourly value, `p` = price):
+
+| Metric | Score |
+|---|---|
+| `price`: cost efficiency | cost per use `p / uses` as a share of `h`: 1% → 10, 10% → 7, 100% → 4, 10× → 1 (`10 − 3·log10(share / 1%)`). Then ±10 per 100% below or above the market price (the median at verified stores, else the mandate's `benchmark_price`), capped at ±2. With no use estimate, only the market: `5.5 ± 10 × difference` |
+| `time_saved`: opportunity cost | `r = hours × h / p`: `1 + 6r` up to `r = 1` (pays for itself = 7), then `7 + 3(r − 1)` up to 10 at `r = 2` |
+| `utility`: functional necessity | the mean of frequency (`2 + 8·ln(1 + uses_per_month) / ln 31`: daily = 10) and `solves`, then +1 if `core`, −1 if not |
+| `added_value`: intangible and secondary | `1 + 1.5 × Σ benefit levels` (max +6), +1 when two or more areas benefit, `+4 × resale / p` (max 2), `+2 × added_value_usd / p` (max 2) |
+
+All scores are clamped to 1–10. Metrics with no inputs are left out and the others' weights scaled up. `coverage` is the share of weight backed by inputs.
+
+**Weights** add up to 100. Goals set them:
+
+| Goal | price | time_saved | utility | added_value |
+|---|---|---|---|---|
+| `balanced` (default) | 30 | 25 | 30 | 15 |
+| `save_money` | 40 | 20 | 25 | 15 |
+| `save_time` | 20 | 40 | 25 | 15 |
+| `wellbeing` | 20 | 20 | 25 | 35 |
+
+Custom weights are also allowed. The total is `Σ score × weight / Σ weight`. The rubric's own example (8, 9, 7, 6 at 30/25/30/15) totals 7.65.
+
+**Net value** over one year: `hours saved × h + added_value_usd + resale_value − price`. It's checked for purchases at or above `net_check_over` (default $100).
+
+**Policy** (`earnest eval policy`):
+- the goal or weights
+- `threshold` (default 7.5)
+- `hourly_value` (default $30)
+- `gate` (default off)
+- `net_check_over`
+
+A purchase **passes** when coverage is at least 50%, the total is at least the threshold, and a checked net value isn't negative.
+
+**Gate.** With the gate on, a request escalates (check 9c) with:
+- `eval:missing`: no estimate
+- `eval:incomplete:<coverage>`: under 50% of the weight backed by inputs
+- `eval:below_threshold:<total><threshold>`
+- `eval:negative_net_value:<n>`
+
+These are never violations: the agent made a case and you decide. Gift mandates (judged by the gift rubric, 3k) and standing restocks (pre-approved) aren't gated. With the gate off, purchases are still scored. Every decision with an estimate carries an `evaluation` block (`total`, `threshold`, `passes`, `coverage`, `net_value`, `scores`).
+
+**Review.** After using the purchase, `earnest eval review <request_id>` takes the same inputs and scores what it was really worth with your current policy. It's compared with the estimate: `total_gap`, per-metric gaps, net-value gap, and a verdict (`overrated` at +1 or more, `underrated` at −1 or less, otherwise `about right`). Only the first review of a purchase counts for trust: a gap of 2.5 or more is `eval_overclaim` (−2), within 1 point is `eval_calibrated` (+1).
+
+**Agent report** (`earnest eval agent`) covers a period (default 365 days):
+- purchases, spend, how many were evaluated and reviewed
+- average estimated and reviewed scores
+- how many met the threshold (judged on the review when there is one)
+- estimated and reviewed net value
+- estimate bias overall and per metric
+- purchases kept and sent back, and unevaluated purchases
+- a grade: A ≥ 8.5, B ≥ 7.5, C ≥ 6.5, D ≥ 5, otherwise F, one letter lower when it overrates by 1.5+ points
+- a one-line summary, e.g. "Grade B: 8 of 10 purchases met your 7.5 bar, net value +$1,240 a year; it overrates purchases by 1.2 points, most on time saved (+2.3)"
+
+`evaluate_purchase` (MCP) and `earnest eval score` score a purchase without asking to buy anything.
+
 ## 4. Scoring
 
 | Event | Points |
@@ -309,6 +378,7 @@ Each approved gift goes into the person's gift history, so it isn't given again.
 | Budget fit (accepted gift with `budget.min`, amount in [min, max]) | +1 |
 | Timeliness (accepted) | on time: `+1 × (1 − price_sensitivity)`; late: `−2 × (1 − price_sensitivity)` |
 | Shadow match (3j): a shadow proposal you then bought yourself | +1, up to 15 in total per task type |
+| Value estimate (3l), on your first review of a purchase | within 1 point: +1; overrated by 2.5+: −2 |
 
 Design notes:
 - **Rise slowly, fall fast.** A good purchase earns roughly +5 to +8 with its outcome; one violation costs −10.

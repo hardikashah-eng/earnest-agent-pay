@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS gift_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, merchant TEXT NOT NULL, price REAL NOT NULL,
     data TEXT NOT NULL, UNIQUE (title, merchant)
 );
+CREATE TABLE IF NOT EXISTS eval_policy (user_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS evaluations (
+    request_id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, at TEXT NOT NULL,
+    PRIMARY KEY (request_id, kind)
+);
 CREATE TABLE IF NOT EXISTS shadow_reviews (request_id TEXT PRIMARY KEY, would_buy INTEGER NOT NULL, at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shadow_matches (
     request_id TEXT PRIMARY KEY, tx_id TEXT NOT NULL, tx_date TEXT NOT NULL, tx_amount REAL NOT NULL,
@@ -693,6 +698,24 @@ class Ledger:
 
     def catalog(self) -> list[dict]:
         return [json.loads(r["data"]) for r in self.db.execute("SELECT data FROM gift_catalog ORDER BY id")]
+
+    # --- purchase evaluation (spec section 3l) ---
+    def eval_policy(self, user_id: str) -> dict | None:
+        r = self.db.execute("SELECT data FROM eval_policy WHERE user_id = ?", (user_id,)).fetchone()
+        return json.loads(r["data"]) if r else None
+
+    def put_eval_policy(self, user_id: str, data: dict) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO eval_policy VALUES (?, ?)", (user_id, json.dumps(data)))
+
+    def put_eval(self, request_id: str, kind: str, data: dict, at: datetime) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO evaluations VALUES (?, ?, ?, ?)",
+                            (request_id, kind, json.dumps(data), at.isoformat()))
+
+    def get_evals(self, request_id: str) -> dict[str, dict]:
+        return {r["kind"]: json.loads(r["data"]) for r in self.db.execute(
+            "SELECT kind, data FROM evaluations WHERE request_id = ?", (request_id,))}
 
     # --- shadow mode (spec section 3j) ---
     def put_shadow(self, user_id: str, agent_id: str, card: str, at: datetime) -> None:

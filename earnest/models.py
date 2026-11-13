@@ -237,6 +237,7 @@ class SpendRequest:
     item: str | None = None  # what's being bought; lets the gateway check purchase history
     quantity: int = 1        # units in `amount`, so prices compare per unit
     product_id: str | None = None  # ASIN / UPC / GTIN when the agent knows it (see products.py)
+    evaluation: dict | None = None  # the agent's value estimate (lifespan, uses, hours saved...), see evaluation.py
 
     @classmethod
     def from_dict(cls, d: dict) -> "SpendRequest":
@@ -257,10 +258,13 @@ class SpendRequest:
             item=_string(d, "item"),
             quantity=_quantity(d),
             product_id=_product_id(d),
+            evaluation=_evaluation(d.get("evaluation")),
         )
 
     def to_dict(self) -> dict:
         out = {k: getattr(self, k) for k in self.__dataclass_fields__}
+        if out["evaluation"] is None:
+            del out["evaluation"]
         if out["item"] is None:
             del out["item"]
         if out["quantity"] == 1:
@@ -268,6 +272,14 @@ class SpendRequest:
         if out["product_id"] is None:
             del out["product_id"]
         return out
+
+
+def _evaluation(v) -> dict | None:
+    if v is None:
+        return None
+    from .evaluation import EvalInputs   # late import: evaluation.py imports this module
+    inputs = EvalInputs.from_dict(v)
+    return None if inputs.is_empty() else inputs.to_dict()
 
 
 @dataclass
@@ -332,6 +344,7 @@ class Decision:
     confidence: dict[str, Any] | None = None  # merchant trust + purchase history, see history.py
     payment: dict[str, Any] | None = None  # how an approved purchase is paid from an agent account (3i)
     shadow: dict[str, Any] | None = None   # shadow mode: what the decision would have been (3j)
+    evaluation: dict[str, Any] | None = None  # value score from the rubric (3l)
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {"request_id": self.request_id, "status": self.status,
@@ -342,6 +355,8 @@ class Decision:
             out["payment"] = self.payment
         if self.shadow is not None:
             out["shadow"] = self.shadow
+        if self.evaluation is not None:
+            out["evaluation"] = self.evaluation
         if self.confidence is not None:
             out["confidence"] = self.confidence
         return out

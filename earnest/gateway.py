@@ -215,6 +215,9 @@ class Gateway:
                 conf["signals"].append("standing_mandate")
         if mandate.requires_returnable and "return_policy_unknown" in conf["signals"]:
             extra_esc.append("return_policy_unknown")
+        evaluation = self._evaluate_request(mandate, req, conf)
+        if evaluation is not None and evaluation.get("gate"):
+            extra_esc += evaluation["gate"]
         funding = None
         if account is not None:
             self._sync_ceiling(mandate.user_id, req.agent_id, now)
@@ -232,21 +235,25 @@ class Gateway:
             high_risk_category=self.merchants.high_risk_category(req.category),
             confidence=conf, extra_deny=extra_deny, extra_escalate=extra_esc,
         )
+        summary = self._eval_summary(evaluation)
         if shadow_card is not None:
             # read-only: the real decision, but no credential, no money, no points, no notification
             decision = Decision(request_id, "shadow", ["shadow_mode", *verdict.reasons], t.name, confidence=conf,
                                 shadow={"would_be": verdict.status, "card": shadow_card,
-                                        "violation": verdict.violation})
+                                        "violation": verdict.violation}, evaluation=summary)
             self.ledger.add_request(request_id, mandate.user_id, mandate.task_type, req, "shadow",
                                     decision.to_dict(), now)
+            self._store_eval(request_id, evaluation, now)
             return decision
 
-        decision = Decision(request_id, verdict.status, verdict.reasons, t.name, confidence=conf)
+        decision = Decision(request_id, verdict.status, verdict.reasons, t.name, confidence=conf,
+                            evaluation=summary)
         if verdict.status == "approved":
             self._pay(decision, req, mandate, profile, t, now, request_id, funding)
 
         self.ledger.add_request(request_id, mandate.user_id, mandate.task_type, req,
                                 decision.status, decision.to_dict(), now)
+        self._store_eval(request_id, evaluation, now)
 
         if decision.status == "escalated" and self.notifier is not None:
             self._notify(request_id, req, decision)
@@ -313,7 +320,8 @@ class Gateway:
 
         profile = self.profile(mandate.user_id)
         decision = Decision(request_id, "approved", [*prior, "user_approved"], t.name,
-                            confidence=json.loads(row["decision"]).get("confidence"))
+                            confidence=json.loads(row["decision"]).get("confidence"),
+                            evaluation=json.loads(row["decision"]).get("evaluation"))
         self._pay(decision, req, mandate, profile, t, now, request_id, funding)
         self.ledger.update_request(request_id, "approved", decision.to_dict())
         self.ledger.add_points(mandate.user_id, req.agent_id, mandate.task_type,
@@ -1735,6 +1743,224 @@ class Gateway:
             o = Option.from_dict({**d, "source": d.get("source", "popular")})
             self.ledger.put_catalog(o.title, o.merchant, o.price, o.to_dict())
         return len(items)
+
+
+    # --- purchase evaluation (spec section 3l) ---
+    def eval_policy(self, user_id: str) -> dict:
+        from .evaluation import DEFAULT_POLICY
+        return {**DEFAULT_POLICY, **(self.ledger.eval_policy(user_id) or {})}
+
+    def set_eval_policy(self, user_id: str, goal: str | None = None, weights: dict | None = None,
+                        threshold: float | None = None, hourly_value: float | None = None, gate: bool | None = None,
+                        net_check_over: float | None = None) -> dict:
+        """Your rubric: a goal (balanced, save_money, save_time, wellbeing) or your own weights, the
+        threshold a purchase must reach, what an hour of your time is worth, whether requests below
+        the bar come to you (gate), and the price from which the net-value check applies."""
+        from .evaluation import GOALS, normalize_weights
+        policy = self.eval_policy(user_id)
+        if goal is not None:
+            if goal not in GOALS:
+                raise ValidationError(f"goal must be one of {', '.join(GOALS)}")
+            policy["goal"], policy["weights"] = goal, dict(GOALS[goal])
+        if weights is not None:
+            policy["goal"], policy["weights"] = "custom", normalize_weights(weights)
+        if threshold is not None:
+            if not 1 <= threshold <= 10:
+                raise ValidationError("threshold must be between 1 and 10")
+            policy["threshold"] = threshold
+        if hourly_value is not None:
+            if hourly_value <= 0:
+                raise ValidationError("hourly value must be > 0")
+            policy["hourly_value"] = hourly_value
+        if net_check_over is not None:
+            if net_check_over < 0:
+                raise ValidationError("net check amount must be >= 0")
+            policy["net_check_over"] = net_check_over
+        if gate is not None:
+            policy["gate"] = bool(gate)
+        self.ledger.put_eval_policy(user_id, policy)
+        return policy
+
+    def _market_price(self, conf: dict | None, quantity: int, mandate: Mandate | None) -> float | None:
+        m = (conf or {}).get("market")
+        if m and m.get("median_price"):
+            return round(m["median_price"] * max(1, quantity), 2)
+        return mandate.benchmark_price if mandate and mandate.benchmark_price else None
+
+    def _evaluate_request(self, mandate: Mandate, req: SpendRequest, conf: dict | None) -> dict | None:
+        """Score the agent's value estimate. Gifts are judged by the gift rubric (3k), and standing
+        restocks were pre-approved, so neither is gated; with the gate on, any other request without
+        an estimate comes to you."""
+        from .evaluation import EvalInputs, evaluate, gate_reasons
+        policy = self.eval_policy(mandate.user_id)
+        exempt = mandate.mode == "gift" or mandate.standing is not None
+        if req.evaluation is None:
+            if policy["gate"] and not exempt:
+                return {"gate": ["eval:missing"], "result": None}
+            return None
+        result = evaluate(req.amount, EvalInputs.from_dict(req.evaluation), policy,
+                          self._market_price(conf, req.quantity, mandate))
+        result["weights"] = policy["weights"]
+        gate = gate_reasons(result, policy) if policy["gate"] and not exempt else []
+        return {"gate": gate, "result": result}
+
+    @staticmethod
+    def _eval_summary(evaluation: dict | None) -> dict | None:
+        if not evaluation or evaluation.get("result") is None:
+            return {"missing": True} if evaluation else None
+        r = evaluation["result"]
+        return {"total": r["total"], "threshold": r["threshold"], "passes": r["passes"], "coverage": r["coverage"],
+                "net_value": r["net_value"], "scores": {m: v["score"] for m, v in r["metrics"].items()}}
+
+    def _store_eval(self, request_id: str, evaluation: dict | None, now: datetime) -> None:
+        if evaluation and evaluation.get("result") is not None:
+            self.ledger.put_eval(request_id, "estimate", evaluation["result"], now)
+
+    def score_purchase(self, user_id: str, price: float, inputs: dict, market_price: float | None = None) -> dict:
+        """Score a purchase against your rubric without asking to buy anything."""
+        from .evaluation import EvalInputs, evaluate, gate_reasons
+        if price <= 0:
+            raise ValidationError("price must be > 0")
+        policy = self.eval_policy(user_id)
+        result = evaluate(price, EvalInputs.from_dict(inputs), policy, market_price)
+        result["would_come_to_you"] = gate_reasons(result, policy) if policy["gate"] else []
+        return result
+
+    def purchase_eval(self, request_id: str) -> dict:
+        row = self.ledger.get_request(request_id)
+        if row is None:
+            raise ValidationError(f"unknown request: {request_id}")
+        evals = self.ledger.get_evals(request_id)
+        out = {"request_id": request_id, "agent_id": row["agent_id"], "merchant": row["merchant"],
+               "amount": row["amount"], "item": json.loads(row["data"]).get("item"), "status": row["status"],
+               "estimate": evals.get("estimate"), "review": evals.get("review")}
+        if evals.get("estimate") and evals.get("review"):
+            out["comparison"] = self._compare(evals["estimate"], evals["review"])
+        return out
+
+    @staticmethod
+    def _compare(est: dict, rev: dict) -> dict:
+        from .evaluation import METRICS
+        per = {}
+        for m in METRICS:
+            a, b = est["metrics"][m]["score"], rev["metrics"][m]["score"]
+            if a is not None and b is not None:
+                per[m] = round(a - b, 1)
+        gap = round(est["total"] - rev["total"], 2) if est["total"] is not None and rev["total"] is not None else None
+        nv = (round(est["net_value"] - rev["net_value"], 2)
+              if est["net_value"] is not None and rev["net_value"] is not None else None)
+        return {"total_gap": gap, "by_metric": per, "net_value_gap": nv,
+                "verdict": None if gap is None else "overrated" if gap >= 1 else "underrated" if gap <= -1 else
+                "about right"}
+
+    def review_purchase(self, request_id: str, inputs: dict) -> dict:
+        """After using it: what the purchase was really worth, on the same rubric. Compared with
+        the agent's estimate; a big overestimate costs it trust, a close one earns a little."""
+        from .evaluation import EvalInputs, evaluate
+        from .scoring import EVAL_CALIBRATED, EVAL_OVERCLAIM
+        row = self.ledger.get_request(request_id)
+        if row is None:
+            raise ValidationError(f"unknown request: {request_id}")
+        if row["status"] != "approved":
+            raise ValidationError(f"request {request_id} was {row['status']}; only purchases can be reviewed")
+        inp = EvalInputs.from_dict(inputs)
+        if inp.is_empty():
+            raise ValidationError("say something about how it went: uses, hours saved, scores...")
+        now = self.clock()
+        mandate = self.ledger.get_mandate(row["mandate_id"])
+        conf = json.loads(row["decision"]).get("confidence")
+        result = evaluate(row["amount"], inp, self.eval_policy(row["user_id"]),
+                          self._market_price(conf, json.loads(row["data"]).get("quantity", 1), mandate))
+        first = "review" not in self.ledger.get_evals(request_id)
+        self.ledger.put_eval(request_id, "review", result, now)
+        out = self.purchase_eval(request_id)
+        gap = (out.get("comparison") or {}).get("total_gap")
+        events = []
+        if first and gap is not None:
+            key = (row["user_id"], row["agent_id"], mandate.task_type)
+            if gap >= 2.5:
+                self.ledger.add_points(*key, "eval_overclaim", EVAL_OVERCLAIM, request_id, now)
+                events.append({"kind": "eval_overclaim", "points": EVAL_OVERCLAIM})
+            elif abs(gap) <= 1:
+                self.ledger.add_points(*key, "eval_calibrated", EVAL_CALIBRATED, request_id, now)
+                events.append({"kind": "eval_calibrated", "points": EVAL_CALIBRATED})
+        out["trust_events"] = events
+        return out
+
+    def agent_eval(self, user_id: str, agent_id: str, days: int = 365) -> dict:
+        """How good the agent's purchasing decisions are: its purchases on your rubric, how many met
+        your bar, the net value, and how its estimates compare with your reviews."""
+        from statistics import mean
+        from .evaluation import METRICS, grade
+        policy = self.eval_policy(user_id)
+        since = (self.clock() - timedelta(days=days)).isoformat()
+        bought = [p for p in self.ledger.purchases(user_id) if p["agent_id"] == agent_id and p["at"] >= since]
+        rows = []
+        for p in bought:
+            ev = self.ledger.get_evals(p["request_id"])
+            rows.append({"request_id": p["request_id"], "item": p.get("item"), "merchant": p["merchant"],
+                         "amount": p["amount"], "verdict": p["verdict"], "estimate": ev.get("estimate"),
+                         "review": ev.get("review")})
+        est = [r for r in rows if r["estimate"] and r["estimate"]["total"] is not None]
+        rev = [r for r in rows if r["review"] and r["review"]["total"] is not None]
+        both = [r for r in est if r["review"] and r["review"]["total"] is not None]
+        bias = round(mean(r["estimate"]["total"] - r["review"]["total"] for r in both), 2) if both else None
+        by_metric = {}
+        for m in METRICS:
+            gaps = [r["estimate"]["metrics"][m]["score"] - r["review"]["metrics"][m]["score"] for r in both
+                    if r["estimate"]["metrics"][m]["score"] is not None and r["review"]["metrics"][m]["score"] is not None]
+            if gaps:
+                by_metric[m] = round(mean(gaps), 2)
+        judged = [r["review"]["total"] if r["review"] and r["review"]["total"] is not None else r["estimate"]["total"]
+                  for r in est]
+        quality = round(mean(judged), 2) if judged else None
+        met = sum(t >= policy["threshold"] for t in judged)
+        nv_est = [r["estimate"]["net_value"] for r in est if r["estimate"]["net_value"] is not None]
+        nv_rev = [r["review"]["net_value"] for r in rev if r["review"]["net_value"] is not None]
+        out = {
+            "agent_id": agent_id, "days": days, "purchases": len(rows), "spent": round(sum(r["amount"] for r in rows), 2),
+            "evaluated": len(est), "reviewed": len(rev),
+            "average_score": {"estimated": round(mean(r["estimate"]["total"] for r in est), 2) if est else None,
+                              "reviewed": round(mean(r["review"]["total"] for r in rev), 2) if rev else None},
+            "met_threshold": {"count": met, "of": len(judged), "threshold": policy["threshold"]},
+            "net_value": {"estimated": round(sum(nv_est), 2) if nv_est else None,
+                          "reviewed": round(sum(nv_rev), 2) if nv_rev else None},
+            "estimate_bias": bias, "bias_by_metric": by_metric,
+            "kept": sum(r["verdict"] == "accepted" for r in rows),
+            "sent_back": sum(r["verdict"] in ("rejected", "disputed") for r in rows),
+            "unevaluated": [r["request_id"] for r in rows if not r["estimate"]],
+            "grade": grade(quality, bias),
+        }
+        out["summary"] = self._eval_story(out, policy)
+        out["purchases_detail"] = [{"request_id": r["request_id"], "item": r["item"], "amount": r["amount"],
+                                    "estimated": r["estimate"]["total"] if r["estimate"] else None,
+                                    "reviewed": r["review"]["total"] if r["review"] else None,
+                                    "verdict": r["verdict"]} for r in rows]
+        return out
+
+    @staticmethod
+    def _eval_story(o: dict, policy: dict) -> str:
+        if not o["purchases"]:
+            return f"{o['agent_id']} hasn't bought anything in {o['days']} days"
+        if not o["evaluated"]:
+            return f"{o['agent_id']} made {o['purchases']} purchase(s) without value estimates"
+        names = {"price": "price", "time_saved": "time saved", "utility": "utility", "added_value": "added value"}
+        s = (f"Grade {o['grade']}: {o['met_threshold']['count']} of {o['met_threshold']['of']} purchases met your "
+             f"{policy['threshold']:g} bar")
+        nv = o["net_value"]["reviewed"] if o["net_value"]["reviewed"] is not None else o["net_value"]["estimated"]
+        if nv is not None:
+            s += f", net value {'+' if nv >= 0 else '-'}${abs(nv):,.0f} a year"
+        if o["estimate_bias"] is not None:
+            if o["estimate_bias"] >= 1:
+                worst = max(o["bias_by_metric"].items(), key=lambda kv: kv[1], default=None)
+                s += f"; it overrates purchases by {o['estimate_bias']:.1f} points"
+                if worst and worst[1] >= 1:
+                    s += f", most on {names[worst[0]]} (+{worst[1]:.1f})"
+            elif o["estimate_bias"] <= -1:
+                s += f"; it underrates purchases by {-o['estimate_bias']:.1f} points"
+            else:
+                s += "; its estimates match your reviews"
+        return s
 
 
 def _ordinal_word(n: int | None) -> str:

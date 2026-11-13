@@ -68,7 +68,7 @@ Then add the server to your MCP client (e.g. Claude Desktop / Claude Code config
 }
 ```
 
-The agent gets five core tools: `list_mandates`, `get_limits`, `get_account`, `check_merchant` and `request_spend`. For gifts it also gets `get_gift_tasks`, `propose_gift_options`, `note_gift_preference` and `gift_ordered`. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
+The agent gets five core tools: `list_mandates`, `get_limits`, `get_account`, `check_merchant` and `request_spend`. For gifts it also gets `get_gift_tasks`, `propose_gift_options`, `note_gift_preference` and `gift_ordered`. `evaluate_purchase` scores a purchase on your rubric before it asks. Its identity comes from the server's environment, not tool arguments, and only you report outcomes (via the CLI), so the agent can't grade itself.
 
 ## Merchant trust and purchase confidence
 
@@ -196,6 +196,32 @@ python -m earnest gifts feedback g_123 loved --user user_demo
 
 Preferences come from you, from what an agent heard in your own conversations, or from wishlists and public posts you point it to. earnest doesn't go through anyone's accounts. Rules: [spec/SPEC.md](spec/SPEC.md) section 3k.
 
+## Is it worth it? Purchase evaluation
+
+Score every purchase on four numbers instead of on how convincing the agent sounds, and see how good the agent's buying decisions really are.
+
+```bash
+python -m earnest eval policy --user user_demo --goal save_time --hourly-value 50 --threshold 7.5 --gate on
+python -m earnest eval score --user user_demo --price 449 --lifespan-months 60 --uses-per-month 12 \
+    --hours-saved 40 --solves 9 --core yes --benefit stress=2 --resale 80     # 9.0/10, net value +$1,631/yr
+python -m earnest eval review req_123 --uses-per-month 8 --hours-saved 20 --solves 7   # what it was really worth
+python -m earnest eval agent --user user_demo --agent agent_shopper
+# Grade B: 8 of 10 purchases met your 7.5 bar, net value +$1,240 a year; it overrates purchases by 1.2 points, most on time saved (+2.3)
+```
+
+| Metric | Measures | Scored from |
+|---|---|---|
+| Price | cost efficiency | cost per use against your hourly value, and the market price |
+| Time saved | opportunity cost | hours saved per year × your hourly value, against the price (pays for itself = 7) |
+| Utility | functional necessity | how often it's used, how well it solves the problem, core vs nice-to-have |
+| Added value | intangible benefits | stress, health, skill, social, comfort; resale |
+
+- **Your weights:** pick a goal (`balanced` 30/25/30/15, `save_money` puts price at 40%, `save_time` puts time at 40%, `wellbeing`) or set your own.
+- **Your bar:** with `--gate on`, a request without an estimate, below your threshold, or a larger purchase whose one-year net value (hours saved × hourly value + added value − price) is negative comes to you instead of going through.
+- **Honest estimates:** the agent sends its estimate with each request (or checks first with `evaluate_purchase`). You review purchases after using them. If it overrated one by 2.5+ points it loses trust; if it was within a point it gains a little.
+
+Rules: [spec/SPEC.md](spec/SPEC.md) section 3l.
+
 ## After the purchase, and for the whole household
 
 ```bash
@@ -318,6 +344,7 @@ earnest/           the gateway
   accounts.py      agent accounts: allowance, gift cards, prepaid cards
   shadow.py        shadow mode: card profile, matching, readiness
   gifting.py       gift concierge: people, dates, budgets, option ranking
+  evaluation.py    purchase evaluation: weighted rubric, net value, agent grades
   ledger.py        SQLite ledger
   gateway.py       ties it together
   backends/mock.py simulated scoped, expiring cards

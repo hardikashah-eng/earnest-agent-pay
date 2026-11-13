@@ -25,6 +25,9 @@
     python -m earnest gifts policy --user user_demo --agent agent_shopper --annual-budget 1500
     python -m earnest gifts plan --user user_demo                # run daily: plans upcoming dates
     python -m earnest gifts approve g_123 --user user_demo
+    python -m earnest eval policy --user user_demo --goal save_time --hourly-value 50 --threshold 7.5 --gate on
+    python -m earnest eval review req_123 --uses-per-month 8 --hours-saved 20 --solves 7
+    python -m earnest eval agent --user user_demo --agent agent_shopper
     python -m earnest demo
 """
 from __future__ import annotations
@@ -309,6 +312,54 @@ def _gifts_cmd(args, ap, gw: Gateway) -> int:
     return 0
 
 
+def _eval_inputs(args) -> dict:
+    d = {}
+    for k, attr in (("lifespan_months", "lifespan_months"), ("uses_per_month", "uses_per_month"),
+                    ("total_uses", "total_uses"), ("hours_saved_per_year", "hours_saved"), ("solves", "solves"),
+                    ("resale_value", "resale"), ("added_value_usd", "added_value")):
+        v = getattr(args, attr)
+        if v is not None:
+            d[k] = v
+    if args.core is not None:
+        d["core"] = args.core == "yes"
+    benefits = dict(x.split("=", 1) for x in args.benefit or [] if "=" in x)
+    if benefits:
+        d["benefits"] = {k: float(v) for k, v in benefits.items()}
+    scores = dict(x.split("=", 1) for x in args.score or [] if "=" in x)
+    if scores:
+        d["scores"] = {k: float(v) for k, v in scores.items()}
+    return d
+
+
+def _eval_cmd(args, ap, gw: Gateway) -> int:
+    a = args.action
+    if a == "policy":
+        if not args.user:
+            ap.error("eval policy needs --user")
+        weights = None
+        if args.weights:
+            try:
+                weights = {k: float(v) for k, v in (x.split("=", 1) for x in args.weights.split(","))}
+            except ValueError:
+                ap.error("--weights looks like price=30,time_saved=25,utility=30,added_value=15")
+        _print(gw.set_eval_policy(args.user, args.goal, weights, args.threshold, args.hourly_value,
+                                  None if args.gate is None else args.gate == "on", args.net_check_over))
+    elif a == "score":
+        if not (args.user and args.price):
+            ap.error("eval score needs --user and --price")
+        _print(gw.score_purchase(args.user, args.price, _eval_inputs(args), args.market_price))
+    elif a == "show":
+        _print(gw.purchase_eval(args.id or ap.error("eval show needs a request id")))
+    elif a == "review":
+        _print(gw.review_purchase(args.id or ap.error("eval review needs a request id"), _eval_inputs(args)))
+    elif a == "agent":
+        if not (args.user and args.agent):
+            ap.error("eval agent needs --user and --agent")
+        out = gw.agent_eval(args.user, args.agent, args.days)
+        _print(out if args.json else out["summary"])
+    return 0
+
+
 def _backend_from_env():
     if os.environ.get("EARNEST_BACKEND", "mock") == "stripe":
         from .backends import StripeIssuingBackend
@@ -508,6 +559,32 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--options", help="propose: JSON file of options (default: the popular-items catalog)")
     p.add_argument("--option", type=int, help="approve: pick this shortlisted option instead")
 
+    p = sub.add_parser("eval", help="score purchases on your rubric: price, time saved, utility, added value")
+    p.add_argument("action", choices=["policy", "score", "show", "review", "agent"])
+    p.add_argument("id", nargs="?", help="show / review: request id")
+    p.add_argument("--user")
+    p.add_argument("--agent")
+    p.add_argument("--goal", choices=["balanced", "save_money", "save_time", "wellbeing"], help="policy")
+    p.add_argument("--weights", help="policy: price=30,time_saved=25,utility=30,added_value=15 (adds to 100)")
+    p.add_argument("--threshold", type=float, help="policy: the score a purchase must reach (1-10)")
+    p.add_argument("--hourly-value", type=float, help="policy: what an hour of your time is worth")
+    p.add_argument("--gate", choices=["on", "off"], help="policy: send requests below the bar to you")
+    p.add_argument("--net-check-over", type=float, help="policy: price from which net value must be >= 0")
+    p.add_argument("--price", type=float, help="score")
+    p.add_argument("--market-price", type=float, help="score")
+    p.add_argument("--lifespan-months", type=float)
+    p.add_argument("--uses-per-month", type=float)
+    p.add_argument("--total-uses", type=float)
+    p.add_argument("--hours-saved", type=float, help="hours saved per year")
+    p.add_argument("--solves", type=float, help="1-10: how well it solves the problem")
+    p.add_argument("--core", choices=["yes", "no"], help="a core, frequent function?")
+    p.add_argument("--benefit", action="append", help="e.g. --benefit stress=2 (stress, health, skill, social, comfort: 0-3)")
+    p.add_argument("--resale", type=float, help="resale value after a year")
+    p.add_argument("--added-value", type=float, help="other value over a year, in dollars")
+    p.add_argument("--score", action="append", help="direct 1-10 score, e.g. --score utility=7")
+    p.add_argument("--days", type=int, default=365, help="agent: period")
+    p.add_argument("--json", action="store_true", help="agent: full report")
+
     # --- spending insights ---
     p = sub.add_parser("import", help="manually import a card statement CSV")
     p.add_argument("file")
@@ -704,6 +781,8 @@ def main(argv: list[str] | None = None) -> int:
             return _shadow_cmd(args, ap, gw)
         elif args.cmd == "gifts":
             return _gifts_cmd(args, ap, gw)
+        elif args.cmd == "eval":
+            return _eval_cmd(args, ap, gw)
         elif args.cmd == "events":
             _print([dict(r) for r in gw.ledger.events(args.user, args.agent)])
         elif args.cmd in ("import", "sync", "imports", "insights", "dismiss-insight"):

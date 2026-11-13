@@ -114,3 +114,11 @@ Next: gift-card balance checks through retailer APIs, a bank-aggregator `Transac
 
 Next: price-drop and stock watching for shortlisted gifts, shared household gift lists, and reminders for occasions with no plan.
 
+## Purchase evaluation (v0.6) — done
+
+- A weighted rubric (price as cost per use, time saved, utility, added value; 1-10 each), goal presets and custom weights, a threshold, and a one-year net-value check for larger purchases.
+- Agents send value estimates with requests (or score first via `evaluate_purchase`); an optional gate sends missing, incomplete, below-bar or negative-net-value requests to the user.
+- User reviews after use; estimate-vs-review gaps feed trust (overclaim -2, calibrated +1) and a per-agent report with a grade and per-metric bias.
+
+Next: suggest weights from the user's reviews, and show the rubric on approval messages.
+

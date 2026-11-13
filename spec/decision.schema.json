@@ -42,6 +42,19 @@
         "note": { "type": "string" }
       }
     },
+    "evaluation": {
+      "type": "object",
+      "description": "The agent's value estimate scored on the user's rubric (SPEC.md 3l). `missing: true` when the gate is on and none was given.",
+      "properties": {
+        "total": { "type": ["number", "null"], "description": "Weighted score, 1-10." },
+        "threshold": { "type": "number" },
+        "passes": { "type": "boolean" },
+        "coverage": { "type": "number", "description": "Share of the weights backed by inputs, 0-1." },
+        "net_value": { "type": ["number", "null"], "description": "One year: hours saved x hourly value + added value - price." },
+        "scores": { "type": "object", "description": "price, time_saved, utility, added_value: 1-10 or null." },
+        "missing": { "type": "boolean" }
+      }
+    },
     "shadow": {
       "type": "object",
       "description": "Present when status is shadow (SPEC.md 3j).",
